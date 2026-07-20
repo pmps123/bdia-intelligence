@@ -1,0 +1,241 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id                String   @id @default(cuid())
+  name              String
+  workspace         String   @default("rafli") // audits are isolated per workspace
+  priceSource       String   @default("PRICE_LIST") // PRICE_LIST | BASIC | CUSTOM — which internal price source the audit is based on
+  step              String   @default("internal") // internal | vendor | detect | review | price | export
+  internalUploadId  String?
+  vendorUploadId    String?
+  internalDatasetId String?
+  vendorDatasetId   String?
+  sessionId         String?
+  validationRunId   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Upload {
+  id          String      @id @default(cuid())
+  fileName    String
+  fileType    String // xlsx | xls | csv | pdf
+  fileSize    Int
+  storagePath String
+  createdAt   DateTime    @default(now())
+  worksheets  Worksheet[]
+  datasets    Dataset[]
+}
+
+model Worksheet {
+  id          String @id @default(cuid())
+  uploadId    String
+  upload      Upload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  name        String
+  sheetIndex  Int
+  rowCount    Int
+  columnCount Int
+  headers     String // JSON string[]
+  preview     String // JSON sample rows (array of arrays)
+}
+
+model Dataset {
+  id             String    @id @default(cuid())
+  name           String
+  kind           String // VENDOR | INTERNAL
+  vendorName     String?
+  uploadId       String
+  upload         Upload    @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  worksheetName  String
+  mapping        String // JSON ColumnMapping[]
+  cleaningReport String? // JSON dynamically generated cleaning rules
+  rowCount       Int       @default(0)
+  createdAt      DateTime  @default(now())
+  rows           DataRow[]
+}
+
+model DataRow {
+  id        String  @id @default(cuid())
+  datasetId String
+  dataset   Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  rowIndex  Int
+  data      String // JSON: mapped field -> original value
+  nameRaw   String?
+  nameNorm  String?
+  code      String?
+  variant   String?
+  brand     String?
+  category  String?
+  tokens    String? // JSON string[]
+  prices    String? // JSON { field: number }
+  qty       Float?
+  // quantity gradation (Customized Price) — parsed dynamically from uploaded data
+  qtyMin       Float?
+  qtyMax       Float?
+  qtyRuleLabel String?
+
+  @@index([datasetId])
+  @@index([nameNorm])
+}
+
+model MatchSession {
+  id                String               @id @default(cuid())
+  name              String
+  vendorDatasetId   String
+  internalDatasetId String
+  status            String               @default("PENDING")
+  stats             String?
+  createdAt         DateTime             @default(now())
+  results           MatchResult[]
+  validations       PriceValidationRun[]
+}
+
+model MatchResult {
+  id            String       @id @default(cuid())
+  sessionId     String
+  session       MatchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  vendorRowId   String
+  internalRowId String?
+  score         Float        @default(0)
+  confidence    Float        @default(0)
+  status        String // MATCHED | PARTIAL | NEED_REVIEW | UNMATCHED | MANUAL
+  source        String       @default("ENGINE") // ENGINE | MASTER | MANUAL
+  candidates    String? // JSON top candidates
+  detail        String? // JSON per-signal scores
+
+  @@index([sessionId])
+  @@index([status])
+}
+
+model MasterMapping {
+  id            String   @id @default(cuid())
+  vendorName    String   @default("")
+  vendorKey     String
+  vendorLabel   String
+  internalKey   String
+  internalLabel String
+  internalCode  String?
+  usageCount    Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@unique([vendorName, vendorKey])
+}
+
+model PriceValidationRun {
+  id                 String                @id @default(cuid())
+  name               String
+  sessionId          String
+  session            MatchSession          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  referenceDatasetId String
+  vendorPriceField   String
+  internalPriceField String
+  tolerancePct       Float                 @default(0)
+  status             String                @default("COMPLETED")
+  stats              String?
+  createdAt          DateTime              @default(now())
+  items              PriceValidationItem[]
+}
+
+model PriceValidationItem {
+  id            String             @id @default(cuid())
+  runId         String
+  run           PriceValidationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  matchResultId String? // null for internal-only rows (full join, no vendor match at all)
+  vendorRowId   String?
+  internalRowId String?
+  vendorLabel   String
+  internalLabel String
+  vendorPrice   Float?
+  internalPrice Float?
+  diff          Float?
+  diffPct       Float?
+  status        String // SAME | HIGHER | LOWER | MISSING | NOT_IN_INTERNAL | NOT_IN_VENDOR
+
+  @@index([runId])
+}
+
+model TransformRun {
+  id        String   @id @default(cuid())
+  pipeline  String // daily-sales-performance | monitoring-sales | business-flow | marketing
+  status    String   @default("RUNNING") // RUNNING | COMPLETED | FAILED
+  log       String   @default("")
+  files     String   @default("{}") // JSON { role: fileName } for display
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  workspace String // which workspace's page this belongs to
+  order     Int      @default(0)
+  type      String // text | heading | bullet | table | image
+  content   String // JSON, shape depends on type
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspace])
+}
+
+model SalesmanRow {
+  id          String   @id @default(cuid())
+  workspace   String // rafli | wijaya
+  bulan       String // month label as given by the source file, e.g. "January"
+  branch      String
+  division    String
+  legacyCode  String
+  newCode     String?
+  salesName   String?
+  nik         String?
+  tanggalMasuk  String? // free-text date, e.g. "2026-02-01" — sourced from Mapping Salesman Berjalan when present
+  tanggalKeluar String?
+  aktif       String   @default("Aktif") // Aktif | Tidak Aktif
+  needsReview Boolean  @default(false) // true = duplicate Legacy code the import couldn't resolve automatically
+  source      String   @default("IMPORT") // IMPORT | MANUAL — re-import never overwrites an existing row
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([workspace, bulan, legacyCode])
+  @@index([workspace, bulan])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  workspace String
+  title     String   @default("Untitled")
+  type      String // text | heading | bullet | table | image — same shapes as Block
+  content   String // JSON, same shape as Block.content
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspace])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  workspace String
+  role      String // user | assistant
+  content   String
+  model     String? // which OpenRouter model produced this (assistant messages only)
+  createdAt DateTime @default(now())
+
+  @@index([workspace, createdAt])
+}
+
+model Job {
+  id        String   @id @default(cuid())
+  type      String
+  status    String   @default("RUNNING")
+  progress  Float    @default(0)
+  message   String   @default("")
+  result    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

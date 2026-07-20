@@ -1,0 +1,23 @@
+node_modules/
+.next/
+__pycache__/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
+.env
+prisma/dev.db*
+uploads/
+storage/
+reports/
+.playwright-mcp/
+.DS_Store
+
+# service account keys — never commit these
+pipamas-*.json
+*-sa-key.json
+.tmp-check/
+
+# internal business data — real sales/employee figures, never commit
+*.xlsx
+*.xls

@@ -1,0 +1,243 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * BDIA Intelligence identity: black & white base with a single dark-amber
+ * accent — an auditor's ledger. Light content surface for dense financial
+ * tables, a near-black sidebar for structure, amber only where it means
+ * something: the primary action, the active selection, the signature marks.
+ */
+:root {
+  --radius: 0.5rem;
+  --background: #fafafa;
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: #b8894f; /* the one accent: dark amber */
+  --primary-foreground: #ffffff;
+  --secondary: #f1f1ef;
+  --secondary-foreground: #3d3d3a;
+  --muted: #f1f1ef;
+  --muted-foreground: #6e6e6b;
+  --accent: #f5f0e8; /* faint amber-tinted hover */
+  --accent-foreground: #0a0a0a;
+  --destructive: #a8524c; /* muted red — status only */
+  --destructive-foreground: #ffffff;
+  --border: #e5e5e2;
+  --input: #dcdcd8;
+  --ring: #b8894f;
+  --sidebar: #111111;
+  --sidebar-foreground: #a6a6a2;
+  --sidebar-accent: #1c1c1c;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #252525;
+  --copper: #b8894f; /* legacy alias for the amber accent */
+  --status-good: #4c7a5c; /* muted green — paid / healthy */
+  --status-bad: #a8524c; /* muted red — overdue */
+  --chart-1: #b8894f;
+  --chart-2: #0a0a0a;
+  --chart-3: #4c7a5c;
+  --chart-4: #a8524c;
+  --chart-5: #6e6e6b;
+  /* shadow tokens */
+  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06);
+  --shadow-elevated: 0 4px 12px 0 rgb(0 0 0 / 0.08), 0 2px 4px -1px rgb(0 0 0 / 0.05);
+  --sidebar-width: 240px;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-copper: var(--copper);
+  --color-status-good: var(--status-good);
+  --color-status-bad: var(--status-bad);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-inter), ui-sans-serif, sans-serif;
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: "tnum";
+  }
+  h1,
+  h2 {
+    @apply font-display;
+  }
+}
+
+/*
+ * Signature: the "ledger rule" — a short amber pen-stroke an auditor leaves
+ * next to what matters. Applied to the active workspace, active sections,
+ * KPI numbers and completed steps across every tool.
+ */
+.ledger-rule {
+  position: relative;
+}
+.ledger-rule::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 1.1em;
+  border-radius: 2px;
+  background: var(--copper);
+}
+.ledger-tick {
+  position: relative;
+  display: inline-block;
+}
+.ledger-tick::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -0.2em;
+  width: 1.4em;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--copper);
+}
+
+/* ─── skeleton loading ─────────────────────────────────────────────────────*/
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.skeleton {
+  background: var(--muted);
+  border-radius: var(--radius-sm);
+  animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+.skeleton-text {
+  height: 0.85em;
+  border-radius: 4px;
+}
+
+/* ─── thin scrollbars ──────────────────────────────────────────────────────*/
+.thin-scroll::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: oklch(0.85 0.008 84);
+  border-radius: 4px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* sidebar scrollbar */
+aside::-webkit-scrollbar {
+  width: 4px;
+}
+aside::-webkit-scrollbar-thumb {
+  background: var(--sidebar-border);
+  border-radius: 4px;
+}
+
+/* ─── execution log — steps appear one by one ──────────────────────────────*/
+@keyframes step-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.log-step {
+  animation: step-in 0.35s ease both;
+}
+@keyframes soft-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.pulse-dot {
+  animation: soft-pulse 1.4s ease-in-out infinite;
+}
+
+/* ─── nav pill active state (Notion-style) ─────────────────────────────────*/
+.nav-item-active {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+  border-left: 2.5px solid var(--copper);
+}
+
+/* ─── module section card ──────────────────────────────────────────────────*/
+.module-card {
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.module-card:hover {
+  box-shadow: var(--shadow-elevated);
+}
+
+/* ─── section sidebar (Sales Dashboard) ───────────────────────────────────*/
+.section-sidebar-item {
+  position: relative;
+  border-radius: var(--radius-sm);
+  transition: background 0.12s ease;
+}
+.section-sidebar-item.active {
+  background: var(--sidebar-accent);
+}
+.section-sidebar-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2.5px;
+  height: 60%;
+  border-radius: 2px;
+  background: var(--copper);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .log-step,
+  .pulse-dot,
+  .skeleton {
+    animation: none;
+  }
+}

@@ -1,0 +1,60 @@
+# Rencana Implementasi: Restrukturisasi Notion Clone Premium - BDIA Intelligence
+
+Mengubah tata letak dan fungsionalitas UI aplikasi agar sepenuhnya menyerupai Notion Clone premium, menyatukan halaman Notes/Page, memfasilitasi visualisasi tabel ganda melalui Dropdown/Toggle, melakukan pemuatan data salesman secara dinamis dari file spreadsheet di root, menambahkan pratinjau (preview) Executive Report, dan menerapkan copywriting profesional dengan navigasi menu / (slash command).
+
+## User Review Required
+
+> [!IMPORTANT]
+> - Penggabungan konsep **Page** dan **Notes** berarti halaman `/workspace` dan `/notes` akan disatukan. Kita akan mengarahkan semua ke satu halaman terpadu (misalnya `/workspace` atau `/notes`) yang memiliki daftar halaman bersarang di sidebar kiri.
+> - Data Salesman akan dibaca langsung dari file Excel `Mapping Salesman Berjalan *.xlsx` yang ada di root saat inisialisasi aplikasi atau via tombol sinkronisasi sekali-klik.
+
+---
+
+## Proposed Changes
+
+### 1. Struktur Navigasi & Sidebar (Notion Clone UI)
+
+#### [MODIFY] [app-shell.tsx](file:///z:/Rafli/bdia%20app/src/components/app/app-shell.tsx)
+- Desain ulang sidebar agar benar-benar identik dengan Notion (collapsible sidebar, nested page/document list, workspace switcher premium).
+- Menghapus link "/notes" terpisah dan menyatukan seluruh dokumen/notes ke bawah menu Workspace.
+- Layout minimalis monokrom dengan aksen Amber/Gold (#B8894F).
+
+---
+
+### 2. Editor Catatan & Menu Slash Command (Notion Editor)
+
+#### [MODIFY] [block-view.tsx](file:///z:/Rafli/bdia%20app/src/components/app/block-view.tsx)
+- Tambahkan pendeteksian input karakter `/` di editor untuk membuka menu popover slash command secara instan guna memilih jenis blok (Teks, Heading, List, Table, Image, atau widget modul khusus).
+- Bersihkan semua teks placeholder/dummy menjadi copywriting profesional dengan nuansa auditor profesional.
+
+#### [NEW] [table-toggle.tsx](file:///z:/Rafli/bdia%20app/src/components/app/table-toggle.tsx)
+- Buat komponen wrapper dropdown/toggle tab untuk memisahkan tampilan saat terdapat dua atau lebih tabel dalam satu block/catatan (Notion Database View style).
+
+---
+
+### 3. Otomatisasi Sinkronisasi Data Salesman berjalan (Jan-Mar)
+
+#### [MODIFY] [page.tsx](file:///z:/Rafli/bdia%20app/src/app/salesman/page.tsx)
+- Tambahkan backend API call atau fungsi internal untuk memindai file Excel `Mapping Salesman Berjalan Jan 2026.xlsx`, `Mapping Salesman Berjalan Feb 2026.xlsx`, dan `Mapping Salesman Berjalan Mar 2026.xlsx` secara langsung dari root folder proyek.
+- Tampilkan data yang disinkronkan tersebut langsung pada tabel interaktif modul Salesman berdasarkan pilihan bulan kerja.
+
+---
+
+### 4. Pratinjau Executive Report
+
+#### [NEW] [report-preview.tsx](file:///z:/Rafli/bdia%20app/src/components/app/report-preview.tsx)
+- Tambahkan komponen pratinjau (preview modal/iframe) untuk menayangkan isi file PDF/HTML laporan harian atau Executive Report sebelum pengguna melakukan unduhan fisik.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- Menjalankan dev server `npm run dev` untuk memastikan tidak ada error kompilasi Next.js/React.
+- Verifikasi skema database Prisma dengan menjalankan `npx prisma db push` jika ada penyesuaian skema minor.
+
+### Manual Verification
+- Buka antarmuka baru di browser dan verifikasi visual Notion-like sidebar dan nested pages.
+- Uji fungsionalitas slash command `/` pada editor catatan.
+- Uji sinkronisasi otomatis dari file spreadsheet berjalan ke dalam modul salesman.
+- Uji pratinjau report harian sebelum diunduh.
