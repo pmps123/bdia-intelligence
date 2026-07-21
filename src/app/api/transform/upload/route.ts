@@ -2,12 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { parseUploadedFile } from "@/lib/parse/file-parser";
 import { PIPELINES, detectRole, extractFileDate } from "@/lib/transform/pipelines";
-import { mkdir, writeFile } from "fs/promises";
-import path from "path";
+import { saveUpload } from "@/lib/storage";
 
 export const runtime = "nodejs";
 
-const STORAGE_DIR = path.join(process.cwd(), "storage", "uploads");
 const ALLOWED = ["xlsx", "xls", "xlsm", "xlsb", "csv"];
 
 /**
@@ -36,9 +34,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Could not read ${file.name}: ${e instanceof Error ? e.message : e}` }, { status: 400 });
   }
 
-  await mkdir(STORAGE_DIR, { recursive: true });
-  const storagePath = path.join(STORAGE_DIR, `${Date.now()}-${file.name}`);
-  await writeFile(storagePath, buffer);
+  let storagePath;
+  try {
+    storagePath = await saveUpload(buffer, file.name);
+  } catch (e) {
+    return NextResponse.json({ error: `Could not store ${file.name}: ${e instanceof Error ? e.message : e}` }, { status: 502 });
+  }
 
   const upload = await prisma.upload.create({
     data: { fileName: file.name, fileType: ext, fileSize: buffer.length, storagePath },

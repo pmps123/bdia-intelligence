@@ -12,7 +12,9 @@ import { toast } from "sonner";
 import { cn, formatBytes } from "@/lib/utils";
 import { PIPELINES, SALES_DASHBOARD_SECTIONS } from "@/lib/transform/pipelines";
 import { TransformLog } from "@/components/app/transform-log";
+import { ColabPanel } from "@/components/app/colab-panel";
 import { ToolGate } from "@/components/app/app-shell";
+import type { ColabInstructions } from "@/lib/transform/colab";
 
 interface UploadedFile {
   id: string;
@@ -52,6 +54,7 @@ function PipelinePage() {
   const [uploading, setUploading] = React.useState(false);
   const [runId, setRunId] = React.useState<string | null>(null);
   const [run, setRun] = React.useState<RunState | null>(null);
+  const [colab, setColab] = React.useState<ColabInstructions | null>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = React.useState(false);
 
@@ -118,13 +121,20 @@ function PipelinePage() {
 
   const start = async () => {
     setRun(null);
+    setRunId(null);
+    setColab(null);
     const res = await fetch("/api/transform/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pipeline: pipeline.id, files: assignments }),
     });
-    if (res.ok) setRunId((await res.json()).runId);
-    else toast.error((await res.json().catch(() => ({}))).error || "Could not start");
+    if (!res.ok) {
+      toast.error((await res.json().catch(() => ({}))).error || "Could not start");
+      return;
+    }
+    const d = await res.json();
+    if (d.colab) setColab(d.colab);
+    else setRunId(d.runId);
   };
 
   return (
@@ -232,6 +242,7 @@ function PipelinePage() {
         </Button>
       </div>
 
+      {colab && <ColabPanel instructions={colab} />}
       {(run || runId) && <TransformLog log={run?.log ?? ""} status={run?.status ?? "RUNNING"} />}
 
       <p className="mt-3 text-xs text-muted-foreground">
