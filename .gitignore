@@ -21,3 +21,6 @@ pipamas-*.json
 # internal business data — real sales/employee figures, never commit
 *.xlsx
 *.xls
+
+.vercel
+.env*
