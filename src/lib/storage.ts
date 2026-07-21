@@ -16,6 +16,23 @@ function headers(extra?: Record<string, string>) {
   return { Authorization: `Bearer ${SERVICE_KEY}`, apikey: SERVICE_KEY, ...extra };
 }
 
+/**
+ * Vercel Functions cap request bodies at ~4.5MB — too small for the xlsx exports
+ * this app deals with. The browser uploads straight to Supabase Storage with this
+ * signed URL instead of relaying the bytes through our server.
+ */
+export async function createSignedUploadUrl(fileName: string): Promise<{ key: string; uploadUrl: string }> {
+  const key = `${Date.now()}-${fileName}`;
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/upload/sign/${BUCKET}/${encodeURIComponent(key)}`, {
+    method: "POST",
+    headers: headers({ "Content-Type": "application/json" }),
+    body: "{}",
+  });
+  if (!res.ok) throw new Error(`Supabase Storage sign-upload failed (${res.status}): ${await res.text()}`);
+  const { url } = (await res.json()) as { url: string };
+  return { key, uploadUrl: `${SUPABASE_URL}/storage/v1${url}` };
+}
+
 export async function saveUpload(buffer: Buffer, fileName: string): Promise<string> {
   const key = `${Date.now()}-${fileName}`;
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${encodeURIComponent(key)}`, {

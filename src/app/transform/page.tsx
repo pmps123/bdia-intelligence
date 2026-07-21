@@ -26,6 +26,7 @@ import { ColabPanel } from "@/components/app/colab-panel";
 import { ReportPreview } from "@/components/app/report-preview";
 import { ToolGate } from "@/components/app/app-shell";
 import type { ColabInstructions } from "@/lib/transform/colab";
+import { uploadTransformFile } from "@/lib/transform/upload-client";
 
 interface PoolFile {
   id: string;
@@ -103,17 +104,13 @@ function SalesDashboard() {
     setUploading(true);
     const added: PoolFile[] = [];
     for (const file of Array.from(list)) {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch("/api/transform/upload", { method: "POST", body: form });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        toast.error(d.error || `Upload failed: ${file.name}`);
-        continue;
+      try {
+        const up = await uploadTransformFile(file);
+        added.push({ id: up.id, fileName: up.fileName, fileSize: up.fileSize, dateLabel: up.dateLabel, sheetText: up.sheetText ?? "" });
+        toast.success(`Added ${up.fileName}${up.dateLabel ? ` — ${up.dateLabel}` : ""}`);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : `Upload failed: ${file.name}`);
       }
-      const up = await res.json();
-      added.push({ id: up.id, fileName: up.fileName, fileSize: up.fileSize, dateLabel: up.dateLabel, sheetText: up.sheetText ?? "" });
-      toast.success(`Added ${up.fileName}${up.dateLabel ? ` — ${up.dateLabel}` : ""}`);
     }
     setUploading(false);
     if (added.length > 0) {

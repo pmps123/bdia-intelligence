@@ -15,6 +15,7 @@ import { TransformLog } from "@/components/app/transform-log";
 import { ColabPanel } from "@/components/app/colab-panel";
 import { ToolGate } from "@/components/app/app-shell";
 import type { ColabInstructions } from "@/lib/transform/colab";
+import { uploadTransformFile } from "@/lib/transform/upload-client";
 
 interface UploadedFile {
   id: string;
@@ -93,16 +94,13 @@ function PipelinePage() {
   const uploadFiles = async (list: FileList | File[]) => {
     setUploading(true);
     for (const file of Array.from(list)) {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("pipeline", pipeline.id);
-      const res = await fetch("/api/transform/upload", { method: "POST", body: form });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        toast.error(d.error || `Upload failed: ${file.name}`);
+      let up: UploadedFile;
+      try {
+        up = await uploadTransformFile(file, pipeline.id);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : `Upload failed: ${file.name}`);
         continue;
       }
-      const up: UploadedFile = await res.json();
       setFiles((fs) => [...fs.filter((f) => f.id !== up.id), up]);
       if (up.detectedRole) {
         // auto-assign when the slot is still free; the user can always change it
