@@ -9,6 +9,12 @@ const nextConfig: NextConfig = {
     // Tree-shake lucide-react so only used icons are bundled.
     // On a network share this meaningfully cuts initial JS parse time.
     optimizePackageImports: ["lucide-react"],
+    // Slow first-compiles over SMB (10-20s+) were exceeding the jest-worker child
+    // process's retry limit ("Jest worker encountered N child process exceptions"),
+    // which 500s whatever request triggered the compile — including uploads.
+    // Compiling in-process (no forked workers) avoids that IPC/timeout entirely.
+    cpus: 1,
+    workerThreads: false,
   },
   webpack: (config) => {
     // storage/uploads and prisma/dev.db are written on every request — without this,
