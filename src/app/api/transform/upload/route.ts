@@ -32,7 +32,10 @@ export async function POST(req: NextRequest) {
 
   let parsed;
   try {
-    parsed = await parseUploadedFile(buffer, body.fileName);
+    // only headers are needed here (role detection) — capping rows keeps large
+    // exports (invoice/SO/packing files run tens of MB) inside the function's time limit;
+    // the pipeline script re-reads the full file straight from storage when it runs
+    parsed = await parseUploadedFile(buffer, body.fileName, { maxRows: 50 });
   } catch (e) {
     return NextResponse.json({ error: `Could not read ${body.fileName}: ${e instanceof Error ? e.message : e}` }, { status: 400 });
   }
