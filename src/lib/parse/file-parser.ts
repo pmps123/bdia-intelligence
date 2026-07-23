@@ -51,7 +51,7 @@ function detectHeader(matrix: string[][]): { headerRowIndex: number; headers: st
   return { headerRowIndex: bestIdx, headers };
 }
 
-function sheetFromMatrix(name: string, index: number, matrix: string[][]): ParsedSheet {
+function sheetFromMatrix(name: string, index: number, matrix: string[][], opts?: { skipHeaderDetection?: boolean }): ParsedSheet {
   // drop fully empty rows and trailing empty columns
   const cleaned = matrix.filter((r) => r.some((c) => c !== ""));
   const width = cleaned.reduce((m, r) => Math.max(m, r.length), 0);
@@ -62,6 +62,10 @@ function sheetFromMatrix(name: string, index: number, matrix: string[][]): Parse
   });
   if (normalized.length === 0) {
     return { name, index, rowCount: 0, columnCount: 0, headers: [], headerRowIndex: 0, rows: [] };
+  }
+  if (opts?.skipHeaderDetection) {
+    const headers = Array.from({ length: width }, (_, i) => `Column ${i + 1}`);
+    return { name, index, rowCount: normalized.length, columnCount: width, headers, headerRowIndex: -1, rows: normalized };
   }
   const { headerRowIndex, headers } = detectHeader(normalized);
   const rows = normalized.slice(headerRowIndex + 1);
@@ -151,45 +155,6 @@ interface OcrWord {
 }
 
 /**
- * Group words into table rows by vertical (y) overlap, ignoring Tesseract's
- * own line grouping. A bordered table's cells often sit at slightly different
- * baselines than their row-mates (each cell is its own little box), so
- * Tesseract's paragraph/line segmentation regularly splits one printed row
- * into several "lines" at different x-ranges - confirmed against the first
- * real document tested against this. Y-overlap across the whole word set is
- * what a printed row actually looks like, regardless of how OCR grouped it.
- */
-function clusterRows(words: OcrWord[]): OcrWord[][] {
-  const sorted = [...words].sort((a, b) => a.y0 - b.y0);
-  const rows: OcrWord[][] = [];
-  let current: OcrWord[] = [];
-  let top = 0;
-  let bottom = 0;
-  for (const w of sorted) {
-    if (current.length === 0) {
-      current = [w];
-      top = w.y0;
-      bottom = w.y1;
-      continue;
-    }
-    const overlap = Math.min(bottom, w.y1) - Math.max(top, w.y0);
-    const minHeight = Math.min(bottom - top, w.y1 - w.y0);
-    if (minHeight > 0 && overlap > minHeight * 0.4) {
-      current.push(w);
-      top = Math.min(top, w.y0);
-      bottom = Math.max(bottom, w.y1);
-    } else {
-      rows.push(current);
-      current = [w];
-      top = w.y0;
-      bottom = w.y1;
-    }
-  }
-  if (current.length > 0) rows.push(current);
-  return rows;
-}
-
-/**
  * Column boundaries derived from where OCR'd text actually sits, not from
  * spacing in flattened text. A printed table's cell content never crosses a
  * ruled column border, so the x-ranges words occupy leave real empty gaps
@@ -247,30 +212,82 @@ function wordsToRow(words: OcrWord[], boundaries: number[]): string[] {
   return cols.map((c) => c.join(" "));
 }
 
-/** OCR one image block, reconstructing a table grid from word bounding boxes instead of flat text. */
+/**
+ * Detect where one printed table row ends and the next begins, from the image itself: a row of
+ * pixels that's darker than its neighbors (a local peak in per-row ink density) marks either a
+ * ruled divider or the visual "gap" between two lines of text - either way, a boundary. Catches
+ * both because thin dotted cell borders AND blank space between text baselines both show up as a
+ * peak relative to the (near-blank) space right around them; nothing here assumes ruled lines
+ * exist at all.
+ */
+function detectRowBands(px: Buffer, width: number, height: number): { top: number; bottom: number }[] {
+  const darkFracRow = (y: number) => {
+    let c = 0;
+    const off = y * width;
+    for (let x = 0; x < width; x++) if (px[off + x] < 190) c++;
+    return c / width;
+  };
+  const rowFrac = Array.from({ length: height }, (_, y) => darkFracRow(y));
+  const peaks: number[] = [];
+  for (let y = 1; y < height - 1; y++) {
+    if (rowFrac[y] > 0.25 && rowFrac[y] >= rowFrac[y - 1] && rowFrac[y] >= rowFrac[y + 1]) peaks.push(y);
+  }
+  const boundaries: number[] = [0];
+  for (const y of peaks) if (y - boundaries[boundaries.length - 1] > 5) boundaries.push(y);
+  boundaries.push(height);
+
+  const bands: { top: number; bottom: number }[] = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const top = Math.max(0, boundaries[i] - 3);
+    const bottom = Math.min(height, boundaries[i + 1] + 3);
+    if (bottom - top >= 6) bands.push({ top, bottom });
+  }
+  return bands;
+}
+
+/**
+ * OCR one image block, reconstructing a table grid from word bounding boxes instead of flat text.
+ * Recognizing the whole block in one Tesseract call regularly merged or silently dropped entire
+ * rows on the densest real table tested against this (rows packed ~18px apart at scan resolution)
+ * - true regardless of upscale factor, since it's Tesseract's own line-layout analysis choking on
+ * the tight spacing, not a resolution problem. OCR-ing one row band at a time with PSM.SINGLE_LINE
+ * sidesteps that layout analysis entirely: row boundaries are found from the image's own ink
+ * profile (detectRowBands) instead of left to Tesseract, and every row gets recognized in
+ * isolation, so a neighboring row's height or gap can no longer make this one vanish.
+ */
 async function ocrTableBlock(
   worker: Awaited<ReturnType<typeof import("tesseract.js").createWorker>>,
   image: Buffer
 ): Promise<string[][]> {
-  // small table text (~8-9pt at typical scan resolution) reads far more reliably upscaled first
   const sharp = (await import("sharp")).default;
-  const srcMeta = await sharp(image).metadata();
-  const upscaled = await sharp(image).resize({ width: Math.round((srcMeta.width ?? 1000) * 3) }).toBuffer();
-  const { data } = await worker.recognize(upscaled, {}, { blocks: true });
-  const words: OcrWord[] = [];
-  for (const block of data.blocks ?? []) {
-    for (const para of block.paragraphs) {
-      for (const line of para.lines) {
-        for (const w of line.words) {
-          const text = w.text.trim();
-          if (text === "" || w.confidence < 40) continue; // low confidence: border-line/signature noise, not real text
-          if (/^[^\p{L}\p{N}]+$/u.test(text)) continue; // pure punctuation: almost always a misread ruled border, not content
-          words.push({ text, confidence: w.confidence, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1 });
+  const { data: px, info } = await sharp(image).greyscale().raw().toBuffer({ resolveWithObject: true });
+  const { width, height } = info;
+  const bands = detectRowBands(px, width, height);
+
+  const rows: OcrWord[][] = [];
+  for (const band of bands) {
+    const cropped = await sharp(px, { raw: { width, height, channels: 1 } })
+      .extract({ left: 0, top: band.top, width, height: band.bottom - band.top })
+      // small table text (~8-9pt at typical scan resolution) reads far more reliably upscaled first
+      .resize({ width: width * 6 })
+      .png()
+      .toBuffer();
+    const { data } = await worker.recognize(cropped, {}, { blocks: true });
+    const words: OcrWord[] = [];
+    for (const block of data.blocks ?? []) {
+      for (const para of block.paragraphs) {
+        for (const line of para.lines) {
+          for (const w of line.words) {
+            const text = w.text.trim();
+            if (text === "" || w.confidence < 40) continue; // low confidence: border-line/signature noise, not real text
+            if (/^[^\p{L}\p{N}]+$/u.test(text)) continue; // pure punctuation: almost always a misread ruled border, not content
+            words.push({ text, confidence: w.confidence, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1 });
+          }
         }
       }
     }
+    if (words.length > 0) rows.push(words);
   }
-  const rows = clusterRows(words);
   const boundaries = detectColumnBoundaries(rows);
   return rows.map((row) => wordsToRow(row, boundaries)).filter((row) => row.some((c) => c !== ""));
 }
@@ -383,7 +400,10 @@ async function ocrPdfTable(buffer: Buffer): Promise<string[][]> {
   const { createWorker, PSM } = await import("tesseract.js");
   const worker = await createWorker("eng", 1, { cachePath: os.tmpdir() });
   try {
-    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
+    // every recognize() call below targets one already-isolated row band (see ocrTableBlock),
+    // never a multi-line block - SINGLE_LINE skips Tesseract's own (unreliable, on this kind of
+    // densely-packed table) line-layout analysis entirely instead of fighting it.
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE });
     const blocks: string[][][] = [];
     for (const image of images) {
       for (const block of await splitAtColumnGutter(image)) {
@@ -409,7 +429,8 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   const { text } = await pdfParse(buffer);
 
   let matrix: string[][];
-  if (text.trim() === "") {
+  const isOcr = text.trim() === "";
+  if (isOcr) {
     matrix = await ocrPdfTable(buffer);
   } else {
     const lines = text
@@ -445,7 +466,15 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   );
   const pruned = keepCols.length > 0 ? source.map((r) => keepCols.map((c) => r[c] ?? "")) : source;
 
-  return { fileType: "pdf", sheets: [sheetFromMatrix("PDF Content", 0, pruned)] };
+  // Header auto-detection (detectHeader) assumes a header row is textually distinguishable from
+  // data rows - true for real spreadsheets, but not for this OCR-reconstructed matrix, where every
+  // row looks structurally alike (a code plus a couple of numbers) and per-block headers were
+  // already stripped by the tabular/sparse-column filters above. On the first real document tested
+  // against this, detectHeader picked an ordinary product row as "the header" and every row above
+  // it - several genuine products - silently vanished (rows before headerRowIndex are discarded).
+  // Skipping header detection for OCR output only avoids that; a real text-layer PDF table keeps
+  // normal header detection, since its structure is exact, not reconstructed.
+  return { fileType: "pdf", sheets: [sheetFromMatrix("PDF Content", 0, pruned, { skipHeaderDetection: isOcr })] };
 }
 
 export async function parseUploadedFile(buffer: Buffer, fileName: string): Promise<ParsedFile> {
