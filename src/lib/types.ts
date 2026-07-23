@@ -144,9 +144,19 @@ export interface BulletBlockContent {
   items: BulletItem[];
 }
 
+/** A database-style column's data type — same small vocabulary as Notion's property types. */
+export type ColumnType = "text" | "number" | "select" | "status" | "date" | "person" | "checkbox" | "url";
+
 export interface TableColumnDef {
   id: string;
   name: string;
+  /** Defaults to "text" when absent — every table created before typed columns existed keeps working unchanged. */
+  type?: ColumnType;
+  /** Known values for "select" | "status" | "person" — new values typed into a cell are appended here automatically. */
+  options?: string[];
+  /** option label -> TagColorKey, for "select" | "status" | "person" columns only. */
+  optionColors?: Record<string, string>;
+  width?: number;
 }
 
 export interface TableRowDef {
@@ -154,11 +164,24 @@ export interface TableRowDef {
   cells: Record<string, string>;
 }
 
+/** A saved way of looking at the same rows — Notion-style view tabs (Table, Timeline, ...). */
+export interface TableViewDef {
+  id: string;
+  name: string;
+  type: "table" | "timeline";
+  /** Timeline only: which "date" columns a row's bar spans. A single-date column can fill both. */
+  startColumnId?: string;
+  endColumnId?: string;
+}
+
 export interface SubTableDef {
   id: string;
   name: string;
   columns: TableColumnDef[];
   rows: TableRowDef[];
+  /** Defaults to one implicit "Table View" when absent, so existing tables render unchanged. */
+  views?: TableViewDef[];
+  activeViewId?: string;
 }
 
 export interface TableBlockContent {
@@ -168,6 +191,10 @@ export interface TableBlockContent {
   tables?: SubTableDef[];
   activeTableId?: string;
 }
+
+/** A block's onChange either replaces content outright, or (safer when a single interaction can
+ *  fire more than one update in the same tick) resolves against the truly-latest content. */
+export type BlockContentUpdater = BlockContent | ((prev: BlockContent) => BlockContent);
 
 export type BlockContent = TextBlockContent | BulletBlockContent | TableBlockContent | ImageBlockContent;
 

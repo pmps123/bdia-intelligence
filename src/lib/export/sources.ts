@@ -1,14 +1,11 @@
 import { prisma } from "@/lib/db";
 import { safeJson } from "@/lib/utils";
 import { priceStatusLabel, type MatchCandidate } from "@/lib/types";
+import { EXTREME_DIFF_PCT } from "@/lib/engine/anomaly";
 
 // any internal-data header that reads as a product code, whatever the vendor calls it
 // (Prod. Variant Code, Alias Code, SKU, ...) - discovered from the sheet's own headers, never a fixed list
 const CODE_HEADER_RE = /code|kode|sku|part\s*no|artikel|item\s*no/i;
-
-// ponytail: fixed cutoff for "this price change is implausible enough to always double-check" -
-// revisit if legitimate vendor increases regularly exceed this (seen so far: ~18%, well under it)
-const EXTREME_DIFF_PCT = 80;
 
 export interface SourceData {
   name: string;

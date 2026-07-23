@@ -4,49 +4,54 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * BDIA Intelligence identity: black & white base with a single dark-amber
- * accent — an auditor's ledger. Light content surface for dense financial
- * tables, a near-black sidebar for structure, amber only where it means
- * something: the primary action, the active selection, the signature marks.
+ * BDIA Intelligence identity — drawn from the BDIA logo: deep navy + a sharp
+ * brick red. Cool light content surface for dense financial tables, a branded
+ * navy sidebar for structure. Navy carries primary actions and the current
+ * selection; red is the sharp accent that means "attention" — price increase,
+ * anomaly, destructive — and echoes the red underline of the logo wordmark.
  */
 :root {
-  --radius: 0.5rem;
-  --background: #fafafa;
-  --foreground: #0a0a0a;
+  --radius: 0.625rem;
+  --background: #f7f8fa; /* cool near-white, faint navy tint */
+  --foreground: #0f2033; /* deep navy ink */
   --card: #ffffff;
-  --card-foreground: #0a0a0a;
+  --card-foreground: #0f2033;
   --popover: #ffffff;
-  --popover-foreground: #0a0a0a;
-  --primary: #b8894f; /* the one accent: dark amber */
+  --popover-foreground: #0f2033;
+  --primary: #17385a; /* brand navy — primary action & selection */
   --primary-foreground: #ffffff;
-  --secondary: #f1f1ef;
-  --secondary-foreground: #3d3d3a;
-  --muted: #f1f1ef;
-  --muted-foreground: #6e6e6b;
-  --accent: #f5f0e8; /* faint amber-tinted hover */
-  --accent-foreground: #0a0a0a;
-  --destructive: #a8524c; /* muted red — status only */
+  --secondary: #eef1f5;
+  --secondary-foreground: #2b3a4a;
+  --muted: #eef1f5;
+  --muted-foreground: #5a6675; /* 5.6:1 on the content surface */
+  --accent: #eaf0f7; /* faint navy-tinted hover */
+  --accent-foreground: #0f2033;
+  --destructive: #b22527; /* brand red — from the logo */
   --destructive-foreground: #ffffff;
-  --border: #e5e5e2;
-  --input: #dcdcd8;
-  --ring: #b8894f;
-  --sidebar: #111111;
-  --sidebar-foreground: #a6a6a2;
-  --sidebar-accent: #1c1c1c;
-  --sidebar-accent-foreground: #fafafa;
-  --sidebar-border: #252525;
-  --copper: #b8894f; /* legacy alias for the amber accent */
-  --status-good: #4c7a5c; /* muted green — paid / healthy */
-  --status-bad: #a8524c; /* muted red — overdue */
-  --chart-1: #b8894f;
-  --chart-2: #0a0a0a;
-  --chart-3: #4c7a5c;
-  --chart-4: #a8524c;
-  --chart-5: #6e6e6b;
-  /* shadow tokens */
-  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06);
-  --shadow-elevated: 0 4px 12px 0 rgb(0 0 0 / 0.08), 0 2px 4px -1px rgb(0 0 0 / 0.05);
-  --sidebar-width: 240px;
+  --border: #e2e7ee;
+  --input: #d6dce4;
+  --ring: #17385a;
+  --sidebar: #0f2740; /* branded deep navy, not generic black */
+  --sidebar-foreground: #9fb0c4;
+  --sidebar-accent: #1a3a5c; /* lifted navy — hover / active pill */
+  --sidebar-accent-foreground: #f5f8fc;
+  --sidebar-border: #1c3752;
+  --brand-navy: #17385a;
+  --brand-red: #b22527;
+  --copper: #b22527; /* signature-mark accent, now the brand red (logo underline) */
+  --status-good: #3f7d5c; /* muted green — healthy / same */
+  --status-bad: #b22527; /* brand red — increase / overdue / anomaly */
+  --chart-1: #17385a; /* navy */
+  --chart-2: #b22527; /* red */
+  --chart-3: #3f7d5c; /* green */
+  --chart-4: #c9992b; /* amber — reserved for warning only */
+  --chart-5: #6b7a8c; /* slate */
+  /* motion */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  /* shadow tokens — cool, subtle */
+  --shadow-card: 0 1px 2px 0 rgb(15 32 51 / 0.05), 0 1px 3px 0 rgb(15 32 51 / 0.06);
+  --shadow-elevated: 0 8px 24px -6px rgb(15 32 51 / 0.12), 0 2px 6px -2px rgb(15 32 51 / 0.06);
+  --sidebar-width: 244px;
 }
 
 @theme inline {
@@ -159,7 +164,7 @@
   width: 6px;
 }
 .thin-scroll::-webkit-scrollbar-thumb {
-  background: oklch(0.85 0.008 84);
+  background: oklch(0.82 0.012 250);
   border-radius: 4px;
 }
 .thin-scroll::-webkit-scrollbar-track {
@@ -197,11 +202,10 @@ aside::-webkit-scrollbar-thumb {
   animation: soft-pulse 1.4s ease-in-out infinite;
 }
 
-/* ─── nav pill active state (Notion-style) ─────────────────────────────────*/
+/* ─── nav pill active state (Notion-style, filled — no side stripe) ─────────*/
 .nav-item-active {
   background: var(--sidebar-accent);
   color: var(--sidebar-accent-foreground);
-  border-left: 2.5px solid var(--copper);
 }
 
 /* ─── module section card ──────────────────────────────────────────────────*/
@@ -220,18 +224,9 @@ aside::-webkit-scrollbar-thumb {
   transition: background 0.12s ease;
 }
 .section-sidebar-item.active {
-  background: var(--sidebar-accent);
-}
-.section-sidebar-item.active::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 2.5px;
-  height: 60%;
-  border-radius: 2px;
-  background: var(--copper);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-weight: 600;
 }
 
 @media (prefers-reduced-motion: reduce) {

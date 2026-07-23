@@ -9,6 +9,7 @@ import * as assert from "assert";
 import { splitSlashVariants, codeSimilarity, tokenize } from "../src/lib/engine/tokens";
 import { parseQtyRule, qtyInRange } from "../src/lib/engine/qty-rules";
 import { PIPELINES, detectRole, extractFileDate, scoreRole } from "../src/lib/transform/pipelines";
+import { analyzeAnomalies, EXTREME_DIFF_PCT } from "../src/lib/engine/anomaly";
 
 // --- slash-separated variant splitting ---
 assert.deepStrictEqual(splitSlashVariants("EU 309 W/K"), ["EU 309 W", "EU 309 K"]);
@@ -90,6 +91,42 @@ assert.strictEqual(detectRole(trk, "Visit Plan Report - 12 July 2026 (55).xlsx",
   const r = codeSimilarity(null, tokenize("PLAIN NAME"), null, tokenize("PLAIN NAME TOO"));
   assert.strictEqual(r.score, 0);
   assert.strictEqual(r.weight, 0);
+}
+
+// --- price anomaly detection (independent of match confidence) ---
+{
+  // a cluster of small, similar increases + one extreme move: only the extreme is "high"
+  const r = analyzeAnomalies([
+    { id: "a", diffPct: 5 },
+    { id: "b", diffPct: 6 },
+    { id: "c", diffPct: 5.5 },
+    { id: "d", diffPct: 4.5 },
+    { id: "e", diffPct: 6.2 },
+    { id: "x", diffPct: EXTREME_DIFF_PCT + 20 }, // extreme move
+  ]);
+  assert.strictEqual(r.byId.get("x")!.severity, "high", "extreme move must be high");
+  assert.strictEqual(r.byId.get("a")!.severity, "none", "in-line increase is not an anomaly");
+  assert.ok(r.summary.high >= 1);
+  assert.strictEqual(r.summary.total, 6, "all six carried a price comparison");
+}
+{
+  // rows with no price comparison (diffPct null) are never flagged and never counted
+  const r = analyzeAnomalies([
+    { id: "n1", diffPct: null },
+    { id: "n2", diffPct: null },
+  ]);
+  assert.strictEqual(r.byId.get("n1")!.severity, "none");
+  assert.strictEqual(r.summary.total, 0);
+  assert.strictEqual(r.summary.high + r.summary.medium, 0);
+}
+{
+  // a statistical outlier (far from peers) is flagged even when well below the extreme ceiling
+  const items = [
+    ...Array.from({ length: 10 }, (_, i) => ({ id: `p${i}`, diffPct: 10 + (i % 2) })), // tight cluster ~10-11%
+    { id: "out", diffPct: 40 }, // way off, but < EXTREME_DIFF_PCT
+  ];
+  const r = analyzeAnomalies(items);
+  assert.notStrictEqual(r.byId.get("out")!.severity, "none", "statistical outlier must be flagged");
 }
 
 console.log("engine-check OK");

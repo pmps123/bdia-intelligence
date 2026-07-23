@@ -21,6 +21,7 @@ import {
   ArrowDown,
   CircleOff,
   SkipForward,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -35,6 +36,7 @@ import { cn, formatNumber, formatBytes } from "@/lib/utils";
 import { JobProgress, useJob } from "@/components/app/job-progress";
 import type { SheetSuggestion, ColumnRole } from "@/lib/engine/suggest";
 import { priceSourceLabel, priceStatusLabel, type MatchCandidate } from "@/lib/types";
+import { analyzeAnomalies } from "@/lib/engine/anomaly";
 
 /* ---------- types mirrored from the API ---------- */
 
@@ -185,7 +187,7 @@ export default function ProjectPage() {
     const res = await fetch(`/api/projects/${id}`);
     if (!res.ok) {
       toast.error("Project not found");
-      router.push("/");
+      router.push("/price-audit");
       return null;
     }
     const d: ProjectState = await res.json();
@@ -384,7 +386,7 @@ export default function ProjectPage() {
     <div className="mx-auto max-w-5xl px-4 py-8">
       {/* header */}
       <div className="mb-6 flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => router.push("/")}>
+        <Button variant="ghost" size="icon" onClick={() => router.push("/price-audit")}>
           <ChevronLeft />
         </Button>
         <div className="min-w-0">
@@ -739,13 +741,48 @@ function PriceStep({ items, stats, filter, setFilter, refresh, validating, onNex
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // anomaly analysis runs on the loaded items — same engine the AI summary and export use
+  const anomaly = React.useMemo(() => analyzeAnomalies(items.map((it) => ({ id: it.id, diffPct: it.diffPct }))), [items]);
+  const [onlyAnomalies, setOnlyAnomalies] = React.useState(false);
+  const [aiSummary, setAiSummary] = React.useState<string | null>(null);
+  const [aiModel, setAiModel] = React.useState<string | null>(null);
+  const [aiLoading, setAiLoading] = React.useState(false);
+
+  const generateSummary = async () => {
+    setAiLoading(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/insights`, { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setAiSummary(d.summary ?? "");
+        setAiModel(d.model ?? null);
+      } else toast.error(d.error || "Gagal generate ringkasan AI");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const [page, setPage] = React.useState(0);
   const pageSize = 200;
-  const filtered = filter ? items.filter((i) => (i.vendorLabel + i.internalLabel).toLowerCase().includes(filter.toLowerCase())) : items;
+  const filtered = items.filter((i) => {
+    if (filter && !(i.vendorLabel + i.internalLabel).toLowerCase().includes(filter.toLowerCase())) return false;
+    if (onlyAnomalies && (anomaly.byId.get(i.id)?.severity ?? "none") === "none") return false;
+    return true;
+  });
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, pageCount - 1);
   const shown = filtered.slice(safePage * pageSize, safePage * pageSize + pageSize);
-  React.useEffect(() => setPage(0), [filter]);
+  React.useEffect(() => setPage(0), [filter, onlyAnomalies]);
+
+  const sevBadge = (id: string) => {
+    const a = anomaly.byId.get(id);
+    if (!a || a.severity === "none") return <span className="text-muted-foreground">-</span>;
+    return (
+      <Badge variant={a.severity === "high" ? "destructive" : "warning"} className="gap-1" title={a.reason} data-testid={`anomaly-severity-badge-${a.severity}`}>
+        <AlertTriangle className="h-3 w-3" /> {a.severity === "high" ? "Tinggi" : "Sedang"}
+      </Badge>
+    );
+  };
   const badge = (s: string) => {
     const map: Record<string, { v: "success" | "destructive" | "info" | "muted"; icon: React.ReactNode }> = {
       SAME: { v: "success", icon: <Equal className="h-3 w-3" /> },
@@ -787,6 +824,37 @@ function PriceStep({ items, stats, filter, setFilter, refresh, validating, onNex
         </Button>
       </div>
 
+      {/* anomaly summary + AI executive summary trigger */}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/3 p-3 text-sm" data-testid="anomaly-banner">
+        {anomaly.summary.high + anomaly.summary.medium > 0 ? (
+          <>
+            <AlertTriangle className="h-4 w-4 shrink-0 text-status-bad" />
+            <span className="font-medium">{anomaly.summary.high} anomali tinggi · {anomaly.summary.medium} sedang</span>
+            <span className="text-muted-foreground">dari {anomaly.summary.total} baris berharga.</span>
+            <Button size="sm" variant={onlyAnomalies ? "default" : "outline"} onClick={() => setOnlyAnomalies((v) => !v)} data-testid="anomaly-filter-toggle">
+              {onlyAnomalies ? "Tampilkan semua" : "Hanya anomali"}
+            </Button>
+          </>
+        ) : (
+          <span className="text-muted-foreground">Tidak ada anomali harga signifikan terdeteksi.</span>
+        )}
+        <Button size="sm" variant="outline" className="ml-auto" onClick={generateSummary} disabled={aiLoading} data-testid="ai-insights-generate-btn">
+          {aiLoading ? <Loader2 className="animate-spin" /> : <Sparkles />} AI Executive Summary
+        </Button>
+      </div>
+
+      {aiSummary && (
+        <Card data-testid="ai-summary-card">
+          <CardContent className="space-y-2 p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <Sparkles className="h-4 w-4 text-primary" /> Ringkasan Eksekutif (AI)
+            </div>
+            <p className="whitespace-pre-wrap text-sm text-muted-foreground">{aiSummary}</p>
+            {aiModel && <p className="text-[11px] text-muted-foreground/70">model: {aiModel}</p>}
+          </CardContent>
+        </Card>
+      )}
+
       <div className="max-h-[60vh] overflow-auto rounded-lg border bg-card thin-scroll">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-muted">
@@ -802,18 +870,19 @@ function PriceStep({ items, stats, filter, setFilter, refresh, validating, onNex
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Matching</th>
               <th className="px-3 py-2 text-right">Confidence</th>
+              <th className="px-3 py-2">Anomali</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={11} className="p-6 text-center text-muted-foreground">
-                  No price rows — accept some matches first, then re-validate.
+                <td colSpan={12} className="p-6 text-center text-muted-foreground">
+                  {onlyAnomalies ? "Tidak ada anomali pada filter ini." : "No price rows — accept some matches first, then re-validate."}
                 </td>
               </tr>
             )}
             {shown.map((it) => (
-              <tr key={it.id} className="border-t">
+              <tr key={it.id} className={cn("border-t", anomaly.byId.get(it.id)?.severity === "high" && "bg-status-bad/5")}>
                 <td className="max-w-56 truncate px-3 py-2">{it.vendorLabel}</td>
                 <td className="max-w-56 truncate px-3 py-2">{it.internalLabel}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatNumber(it.vendorPrice)}</td>
@@ -832,6 +901,7 @@ function PriceStep({ items, stats, filter, setFilter, refresh, validating, onNex
                 <td className="px-3 py-2 text-right tabular-nums text-xs">
                   {it.confidence === null ? "-" : `${Math.round(it.confidence * 100)}%`}
                 </td>
+                <td className="px-3 py-2">{sevBadge(it.id)}</td>
               </tr>
             ))}
           </tbody>
