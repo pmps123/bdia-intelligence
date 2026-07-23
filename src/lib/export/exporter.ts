@@ -107,10 +107,13 @@ export async function exportExcel(input: ExportInput): Promise<Buffer> {
     }
     const row = ws.getRow(rowCursor);
     const needles = cfg.highlightIfContains ?? [];
-    const rowHighlight = needles.length > 0 && Object.values(r).some((v) => {
+    const containsHighlight = needles.length > 0 && Object.values(r).some((v) => {
       const s = String(v ?? "");
       return needles.some((needle) => s.includes(needle));
     });
+    const [aKey, bKey] = cfg.highlightIfBothPresent ?? [];
+    const bothPresentHighlight = !!aKey && !!bKey && String(r[aKey] ?? "").trim() !== "" && String(r[bKey] ?? "").trim() !== "";
+    const rowHighlight = containsHighlight || bothPresentHighlight;
     columns.forEach((c, i) => {
       const v = r[c.key];
       const cell = row.getCell(i + 1);

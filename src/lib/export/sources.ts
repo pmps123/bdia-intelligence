@@ -97,10 +97,7 @@ export async function getSourceData(type: string, id: string): Promise<SourceDat
       // match - the detail blob is {...signals} normally, {...signals, aiReason} when AI ran
       const aiReason = m?.detail ? safeJson<{ aiReason?: string }>(m.detail, {}).aiReason : undefined;
       const row: Record<string, unknown> = {
-        // combine the vendor's own code with the actual matched internal product name, so the
-        // column reads clearly on its own instead of a bare code - falls back to the raw vendor
-        // label when there's no internal match to combine it with
-        "Vendor Product": it.internalLabel ? `${it.vendorLabel} - ${it.internalLabel}` : it.vendorLabel,
+        "Vendor Product": it.vendorLabel,
         "Internal Product": it.internalLabel,
       };
       for (const header of codeHeaders) row[header] = internalData?.[header] ?? "";

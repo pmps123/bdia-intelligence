@@ -287,8 +287,7 @@ function detectRowBands(px: Buffer, width: number, height: number): { top: numbe
   // detectable boundary between any of them) leave one huge band with no internal peaks at all -
   // and OCR-ing a many-row region as if it were one line returns nothing. A typical single-row
   // height is already known from every band elsewhere in this same image; a band several times
-  // that tall, and not simply blank margin, almost certainly hides that many un-detected rows -
-  // mechanically re-slice it into even-height pieces instead of losing the whole region.
+  // that tall, and not simply blank margin, almost certainly hides that many un-detected rows.
   const heights = rawBands.map((b) => b.bottom - b.top).sort((a, b) => a - b);
   const typical = heights[Math.floor(heights.length * 0.4)] ?? 0;
   const bands: { top: number; bottom: number }[] = [];
@@ -296,14 +295,59 @@ function detectRowBands(px: Buffer, width: number, height: number): { top: numbe
     const h = b.bottom - b.top;
     const avgInk = rowFrac.slice(b.top, b.bottom).reduce((a, v) => a + v, 0) / Math.max(1, h);
     if (typical > 0 && h > typical * 1.8 && avgInk > 0.02) {
-      const n = Math.max(1, Math.round(h / typical));
-      const step = h / n;
-      for (let k = 0; k < n; k++) bands.push({ top: Math.round(b.top + k * step), bottom: Math.round(b.top + (k + 1) * step) });
+      // An oversized band isn't always a uniform run of identical rows, though - the region right
+      // below a page's logo/title regularly mixes a faint logo, a section header and the first
+      // real data row in one un-detected span (confirmed on the first real document tested
+      // against this: mechanically dividing that mix into equal pieces cut straight through the
+      // first product row and lost it). Try a second, more sensitive peak search scoped to just
+      // this span before assuming it's a uniform cluster - genuinely mixed content almost always
+      // still has SOME internal gap, just fainter than the standard row-to-row one. Only fall back
+      // to blind equal-division when even that finds nothing (the truly undivided dense case this
+      // was originally written for).
+      const subPeaks: number[] = [];
+      for (let y = b.top + 1; y < b.bottom - 1; y++) {
+        if (rowFrac[y] > 0.12 && rowFrac[y] >= rowFrac[y - 1] && rowFrac[y] >= rowFrac[y + 1]) subPeaks.push(y);
+      }
+      const subBoundaries: number[] = [b.top];
+      for (const y of subPeaks) if (y - subBoundaries[subBoundaries.length - 1] > 5) subBoundaries.push(y);
+      subBoundaries.push(b.bottom);
+
+      if (subBoundaries.length > 2) {
+        for (let i = 0; i < subBoundaries.length - 1; i++) {
+          const top = Math.max(b.top, subBoundaries[i] - 2);
+          const bottom = Math.min(b.bottom, subBoundaries[i + 1] + 2);
+          if (bottom - top >= 6) bands.push({ top, bottom });
+        }
+      } else {
+        const n = Math.max(1, Math.round(h / typical));
+        const step = h / n;
+        for (let k = 0; k < n; k++) bands.push({ top: Math.round(b.top + k * step), bottom: Math.round(b.top + (k + 1) * step) });
+      }
     } else {
       bands.push(b);
     }
   }
   return bands;
+}
+
+/** Recognize one already-isolated row-band crop, returning its words filtered the same way every recognition pass is: confidence >= 40, not pure punctuation. */
+async function recognizeRowWords(worker: Awaited<ReturnType<typeof import("tesseract.js").createWorker>>, cropped: Buffer): Promise<OcrWord[]> {
+  const { data } = await worker.recognize(cropped, {}, { blocks: true });
+  const words: OcrWord[] = [];
+  for (const block of data.blocks ?? []) {
+    for (const para of block.paragraphs) {
+      for (const line of para.lines) {
+        for (const w of line.words) {
+          const text = w.text.trim();
+          if (process.env.DEBUG_WORDS) console.error(`    raw word ${JSON.stringify(text)} conf=${w.confidence.toFixed(1)}`);
+          if (text === "" || w.confidence < 40) continue; // low confidence: border-line/signature noise, not real text
+          if (/^[^\p{L}\p{N}]+$/u.test(text)) continue; // pure punctuation: almost always a misread ruled border, not content
+          words.push({ text, confidence: w.confidence, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1 });
+        }
+      }
+    }
+  }
+  return words;
 }
 
 /**
@@ -324,28 +368,40 @@ async function ocrTableBlock(
   const { data: px, info } = await sharp(image).greyscale().raw().toBuffer({ resolveWithObject: true });
   const { width, height } = info;
   const bands = detectRowBands(px, width, height);
+  if (process.env.DEBUG_ROWS) console.error(`block ${width}x${height}, ${bands.length} bands:`, bands.map((b) => `${b.top}-${b.bottom}`).join(", "));
 
   const rows: OcrWord[][] = [];
   for (const band of bands) {
-    const cropped = await sharp(px, { raw: { width, height, channels: 1 } })
-      .extract({ left: 0, top: band.top, width, height: band.bottom - band.top })
-      // small table text (~8-9pt at typical scan resolution) reads far more reliably upscaled first
-      .resize({ width: width * 6 })
-      .png()
-      .toBuffer();
-    const { data } = await worker.recognize(cropped, {}, { blocks: true });
-    const words: OcrWord[] = [];
-    for (const block of data.blocks ?? []) {
-      for (const para of block.paragraphs) {
-        for (const line of para.lines) {
-          for (const w of line.words) {
-            const text = w.text.trim();
-            if (text === "" || w.confidence < 40) continue; // low confidence: border-line/signature noise, not real text
-            if (/^[^\p{L}\p{N}]+$/u.test(text)) continue; // pure punctuation: almost always a misread ruled border, not content
-            words.push({ text, confidence: w.confidence, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1 });
-          }
-        }
+    const cropAt = (scale: number) =>
+      sharp(px, { raw: { width, height, channels: 1 } })
+        .extract({ left: 0, top: band.top, width, height: band.bottom - band.top })
+        // small table text (~8-9pt at typical scan resolution) reads far more reliably upscaled first
+        .resize({ width: width * scale })
+        .png()
+        .toBuffer();
+    const STANDARD_SCALE = 6;
+    const RETRY_SCALE = 4;
+    let words = await recognizeRowWords(worker, await cropAt(STANDARD_SCALE));
+    // a real product row is a code plus at least one price - fewer than 2 surviving words means
+    // this pass likely lost something. Retrying the identical crop gets the identical result -
+    // confirmed directly, Tesseract's recognition is deterministic for identical input within a
+    // process, even across separate worker instances - but a *different* upscale factor is a
+    // genuinely different input, and confidence on borderline text swings meaningfully with it
+    // (confirmed directly: the same row's price scored 3%, 96%, and 0% confidence at 6x, 4x and
+    // 8x respectively), so it's worth an independent second attempt rather than a repeat.
+    if (words.length < 2) {
+      const retryWords = await recognizeRowWords(worker, await cropAt(RETRY_SCALE));
+      if (retryWords.length > words.length) {
+        // detectColumnBoundaries/wordsToRow compare x-positions across every row in the block, so
+        // a retry recognized at a different scale must have its coordinates normalized back to the
+        // standard scale first - otherwise this row's words land in the wrong column bucket
+        // relative to every row recognized at the standard scale (confirmed directly).
+        const factor = STANDARD_SCALE / RETRY_SCALE;
+        words = retryWords.map((w) => ({ ...w, x0: w.x0 * factor, x1: w.x1 * factor, y0: w.y0 * factor, y1: w.y1 * factor }));
       }
+    }
+    if (process.env.DEBUG_ROWS) {
+      console.error(`[band ${band.top}-${band.bottom}] ${words.map((w) => w.text).join(" ")}`);
     }
     if (words.length > 0) rows.push(words);
   }

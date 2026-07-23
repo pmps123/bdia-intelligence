@@ -245,4 +245,6 @@ export interface ExportConfig {
   highlightIfContains?: string[];
   /** Column keys whose cells always get a red background, regardless of content - unset by default. */
   highlightColumns?: string[];
+  /** A row gets a red background when both of these column keys are non-empty (e.g. a genuine vendor<->internal match, not a one-sided row) - unset by default. */
+  highlightIfBothPresent?: [string, string];
 }

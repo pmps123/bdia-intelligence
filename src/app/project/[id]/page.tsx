@@ -182,6 +182,12 @@ export default function ProjectPage() {
   const [format, setFormat] = React.useState<"xlsx" | "csv" | "pdf">("xlsx");
   const [cols, setCols] = React.useState<{ key: string; title: string; include: boolean }[]>([]);
   const [exporting, setExporting] = React.useState(false);
+  // load() can (and normally does) fire before the internal file's sheet/header details exist yet
+  // (e.g. on the very first page visit, before any file is even uploaded) - this tracks whether
+  // code columns have actually been incorporated, so they can be retrofitted the moment real
+  // internal headers show up, instead of being silently skipped forever because `cols` already
+  // had *some* entries by then.
+  const codeColsAppliedRef = React.useRef(false);
 
   const load = React.useCallback(async () => {
     const res = await fetch(`/api/projects/${id}`);
@@ -195,10 +201,18 @@ export default function ProjectPage() {
     // export column titles follow the selected internal price source, plus whatever code
     // columns the (auto-suggested) internal sheet has
     setCols((c) => {
-      if (c.length) return c;
       const bestName = d.internal?.suggestions[0]?.name;
       const internalHeaders = d.internal?.sheets.find((s) => s.name === bestName)?.headers;
-      return exportColumns(priceSourceLabel(d.project.priceSource), internalHeaders).map((x) => ({ ...x, include: true }));
+      if (c.length === 0) {
+        codeColsAppliedRef.current = !!internalHeaders?.length;
+        return exportColumns(priceSourceLabel(d.project.priceSource), internalHeaders).map((x) => ({ ...x, include: true }));
+      }
+      if (codeColsAppliedRef.current || !internalHeaders?.length) return c;
+      codeColsAppliedRef.current = true;
+      const toAdd = codeColumnsFor(internalHeaders).filter((cc) => !c.some((x) => x.key === cc.key));
+      if (toAdd.length === 0) return c;
+      const insertAt = c.findIndex((x) => x.key === "Internal Product") + 1 || c.length;
+      return [...c.slice(0, insertAt), ...toAdd.map((x) => ({ ...x, include: true })), ...c.slice(insertAt)];
     });
     // preselect detection suggestions
     if (d.internal) {
@@ -349,8 +363,9 @@ export default function ProjectPage() {
           // vendors commonly mark their own price-increase rows with "*"/"**" in the product
           // code, and "Cek Manual" is the computed extreme-price-swing flag - both make a row red
           highlightIfContains: ["*", "Cek Manual"],
-          // vendor product name always stands out red, for quick visual scanning of the download
-          highlightColumns: ["Vendor Product"],
+          // a genuine matched pair (both sides of the comparison actually present, not a
+          // one-sided vendor-only or internal-only row) stands out red for quick visual scanning
+          highlightIfBothPresent: ["Vendor Product", "Internal Product"],
         },
       }),
     });
