@@ -22,11 +22,8 @@ import { toast } from "sonner";
 import { cn, formatBytes } from "@/lib/utils";
 import { PIPELINES, SALES_DASHBOARD_SECTIONS, detectRole } from "@/lib/transform/pipelines";
 import { TransformLog } from "@/components/app/transform-log";
-import { ColabPanel } from "@/components/app/colab-panel";
 import { ReportPreview } from "@/components/app/report-preview";
 import { ToolGate } from "@/components/app/app-shell";
-import type { ColabInstructions } from "@/lib/transform/colab";
-import { uploadTransformFile } from "@/lib/transform/upload-client";
 
 interface PoolFile {
   id: string;
@@ -60,10 +57,8 @@ function SalesDashboard() {
   const [files, setFiles] = React.useState<PoolFile[]>([]);
   const [assignments, setAssignments] = React.useState<Assignments>({});
   const [runs, setRuns] = React.useState<Record<string, RunState>>({});
-  const [colabs, setColabs] = React.useState<Record<string, ColabInstructions>>({});
   const [skipped, setSkipped] = React.useState<Set<string>>(new Set());
   const [reportRun, setReportRun] = React.useState<RunState | null>(null);
-  const [reportColab, setReportColab] = React.useState<ColabInstructions | null>(null);
   const reportPollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const [active, setActive] = React.useState(SECTIONS[0].id);
   const [uploading, setUploading] = React.useState(false);
@@ -104,13 +99,17 @@ function SalesDashboard() {
     setUploading(true);
     const added: PoolFile[] = [];
     for (const file of Array.from(list)) {
-      try {
-        const up = await uploadTransformFile(file);
-        added.push({ id: up.id, fileName: up.fileName, fileSize: up.fileSize, dateLabel: up.dateLabel, sheetText: up.sheetText ?? "" });
-        toast.success(`Added ${up.fileName}${up.dateLabel ? ` — ${up.dateLabel}` : ""}`);
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : `Upload failed: ${file.name}`);
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/transform/upload", { method: "POST", body: form });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error || `Upload failed: ${file.name}`);
+        continue;
       }
+      const up = await res.json();
+      added.push({ id: up.id, fileName: up.fileName, fileSize: up.fileSize, dateLabel: up.dateLabel, sheetText: up.sheetText ?? "" });
+      toast.success(`Added ${up.fileName}${up.dateLabel ? ` — ${up.dateLabel}` : ""}`);
     }
     setUploading(false);
     if (added.length > 0) {
@@ -145,20 +144,11 @@ function SalesDashboard() {
       toast.error((await res.json().catch(() => ({}))).error || "Could not start");
       return;
     }
-    const d: { runs?: Record<string, string>; colab?: Record<string, ColabInstructions>; skipped: string[] } = await res.json();
+    const d: { runs: Record<string, string>; skipped: string[] } = await res.json();
     setSkipped(new Set(d.skipped));
-    if (d.colab) {
-      setColabs(d.colab);
-      setRuns({});
-      const first = SECTIONS.find((s) => d.colab![s.id]);
-      if (first) setActive(first.id);
-    } else {
-      const runsMap = d.runs ?? {};
-      setColabs({});
-      setRuns(Object.fromEntries(Object.entries(runsMap).map(([sec, runId]) => [sec, { runId, status: "PENDING", log: "" }])));
-      const first = SECTIONS.find((s) => runsMap[s.id]);
-      if (first) setActive(first.id);
-    }
+    setRuns(Object.fromEntries(Object.entries(d.runs).map(([sec, runId]) => [sec, { runId, status: "PENDING", log: "" }])));
+    const first = SECTIONS.find((s) => d.runs[s.id]);
+    if (first) setActive(first.id);
     if (d.skipped.length > 0) {
       toast.info(`Skipped: ${d.skipped.map((s) => PIPELINES[s].title).join(", ")}`);
     }
@@ -168,8 +158,6 @@ function SalesDashboard() {
   // builds the executive PDF report (journalism.py) instead of uploading to BigQuery.
   const generateReport = async () => {
     const files = assignments["daily-sales-performance"] ?? {};
-    setReportRun(null);
-    setReportColab(null);
     const res = await fetch("/api/transform/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -179,9 +167,8 @@ function SalesDashboard() {
       toast.error((await res.json().catch(() => ({}))).error || "Could not start");
       return;
     }
-    const d: { runId?: string; colab?: ColabInstructions } = await res.json();
-    if (d.colab) setReportColab(d.colab);
-    else if (d.runId) setReportRun({ runId: d.runId, status: "PENDING", log: "" });
+    const d: { runId: string } = await res.json();
+    setReportRun({ runId: d.runId, status: "PENDING", log: "" });
   };
 
   React.useEffect(() => {
@@ -507,7 +494,6 @@ function SalesDashboard() {
                 </Card>
 
                 {/* run output */}
-                {colabs[sec.id] && <ColabPanel instructions={colabs[sec.id]} />}
                 {run && run.status !== "PENDING" && <TransformLog log={run.log} status={run.status} />}
                 {run?.status === "PENDING" && (
                   <div className="flex items-center gap-2.5 rounded-xl border bg-card p-4 text-sm text-muted-foreground module-card">
@@ -549,7 +535,6 @@ function SalesDashboard() {
                         Generate report
                       </Button>
                     </div>
-                    {reportColab && <ColabPanel instructions={reportColab} />}
                     {reportRun && <TransformLog log={reportRun.log} status={reportRun.status} />}
                     {reportRun?.status === "COMPLETED" && (
                       <div className="mt-3">

@@ -12,10 +12,7 @@ import { toast } from "sonner";
 import { cn, formatBytes } from "@/lib/utils";
 import { PIPELINES, SALES_DASHBOARD_SECTIONS } from "@/lib/transform/pipelines";
 import { TransformLog } from "@/components/app/transform-log";
-import { ColabPanel } from "@/components/app/colab-panel";
 import { ToolGate } from "@/components/app/app-shell";
-import type { ColabInstructions } from "@/lib/transform/colab";
-import { uploadTransformFile } from "@/lib/transform/upload-client";
 
 interface UploadedFile {
   id: string;
@@ -55,7 +52,6 @@ function PipelinePage() {
   const [uploading, setUploading] = React.useState(false);
   const [runId, setRunId] = React.useState<string | null>(null);
   const [run, setRun] = React.useState<RunState | null>(null);
-  const [colab, setColab] = React.useState<ColabInstructions | null>(null);
   const fileRef = React.useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = React.useState(false);
 
@@ -94,13 +90,16 @@ function PipelinePage() {
   const uploadFiles = async (list: FileList | File[]) => {
     setUploading(true);
     for (const file of Array.from(list)) {
-      let up: UploadedFile;
-      try {
-        up = await uploadTransformFile(file, pipeline.id);
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : `Upload failed: ${file.name}`);
+      const form = new FormData();
+      form.append("file", file);
+      form.append("pipeline", pipeline.id);
+      const res = await fetch("/api/transform/upload", { method: "POST", body: form });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error || `Upload failed: ${file.name}`);
         continue;
       }
+      const up: UploadedFile = await res.json();
       setFiles((fs) => [...fs.filter((f) => f.id !== up.id), up]);
       if (up.detectedRole) {
         // auto-assign when the slot is still free; the user can always change it
@@ -119,20 +118,13 @@ function PipelinePage() {
 
   const start = async () => {
     setRun(null);
-    setRunId(null);
-    setColab(null);
     const res = await fetch("/api/transform/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pipeline: pipeline.id, files: assignments }),
     });
-    if (!res.ok) {
-      toast.error((await res.json().catch(() => ({}))).error || "Could not start");
-      return;
-    }
-    const d = await res.json();
-    if (d.colab) setColab(d.colab);
-    else setRunId(d.runId);
+    if (res.ok) setRunId((await res.json()).runId);
+    else toast.error((await res.json().catch(() => ({}))).error || "Could not start");
   };
 
   return (
@@ -240,7 +232,6 @@ function PipelinePage() {
         </Button>
       </div>
 
-      {colab && <ColabPanel instructions={colab} />}
       {(run || runId) && <TransformLog log={run?.log ?? ""} status={run?.status ?? "RUNNING"} />}
 
       <p className="mt-3 text-xs text-muted-foreground">

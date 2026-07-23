@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@prisma/client", "prisma", "exceljs", "xlsx", "pdf-parse", "jspdf"],
+  serverExternalPackages: ["@prisma/client", "prisma", "exceljs", "xlsx", "pdf-parse", "jspdf", "pdf-lib", "tesseract.js", "sharp"],
   eslint: { ignoreDuringBuilds: true },
   experimental: {
     // Tree-shake lucide-react so only used icons are bundled.

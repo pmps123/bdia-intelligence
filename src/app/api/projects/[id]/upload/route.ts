@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { parseUploadedFile } from "@/lib/parse/file-parser";
-import { saveUpload } from "@/lib/storage";
+import { mkdir, writeFile } from "fs/promises";
+import path from "path";
 
 export const runtime = "nodejs";
 
+const STORAGE_DIR = path.join(process.cwd(), "storage", "uploads");
 const ALLOWED = ["xlsx", "xls", "csv", "pdf"];
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -34,12 +36,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ error: "No data rows detected in this file" }, { status: 400 });
   }
 
-  let storagePath;
-  try {
-    storagePath = await saveUpload(buffer, file.name);
-  } catch (e) {
-    return NextResponse.json({ error: `Could not store ${file.name}: ${e instanceof Error ? e.message : e}` }, { status: 502 });
-  }
+  await mkdir(STORAGE_DIR, { recursive: true });
+  const storagePath = path.join(STORAGE_DIR, `${Date.now()}-${file.name}`);
+  await writeFile(storagePath, buffer);
 
   const upload = await prisma.upload.create({
     data: {
