@@ -141,8 +141,142 @@ async function splitAtColumnGutter(buffer: Buffer): Promise<Buffer[]> {
   return [left, right];
 }
 
+interface OcrWord {
+  text: string;
+  confidence: number;
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+/**
+ * Group words into table rows by vertical (y) overlap, ignoring Tesseract's
+ * own line grouping. A bordered table's cells often sit at slightly different
+ * baselines than their row-mates (each cell is its own little box), so
+ * Tesseract's paragraph/line segmentation regularly splits one printed row
+ * into several "lines" at different x-ranges - confirmed against the first
+ * real document tested against this. Y-overlap across the whole word set is
+ * what a printed row actually looks like, regardless of how OCR grouped it.
+ */
+function clusterRows(words: OcrWord[]): OcrWord[][] {
+  const sorted = [...words].sort((a, b) => a.y0 - b.y0);
+  const rows: OcrWord[][] = [];
+  let current: OcrWord[] = [];
+  let top = 0;
+  let bottom = 0;
+  for (const w of sorted) {
+    if (current.length === 0) {
+      current = [w];
+      top = w.y0;
+      bottom = w.y1;
+      continue;
+    }
+    const overlap = Math.min(bottom, w.y1) - Math.max(top, w.y0);
+    const minHeight = Math.min(bottom - top, w.y1 - w.y0);
+    if (minHeight > 0 && overlap > minHeight * 0.4) {
+      current.push(w);
+      top = Math.min(top, w.y0);
+      bottom = Math.max(bottom, w.y1);
+    } else {
+      rows.push(current);
+      current = [w];
+      top = w.y0;
+      bottom = w.y1;
+    }
+  }
+  if (current.length > 0) rows.push(current);
+  return rows;
+}
+
+/**
+ * Column boundaries derived from where OCR'd text actually sits, not from
+ * spacing in flattened text. A printed table's cell content never crosses a
+ * ruled column border, so the x-ranges words occupy leave real empty gaps
+ * exactly at the column dividers - find those gaps, no layout assumed.
+ *
+ * Coverage is counted per row, not unioned across all words: a table title
+ * or footnote that spans the full block width would otherwise fill in every
+ * gap for the whole block (it did, on the first real document tested against
+ * this). A gap only "counts" as filled where enough distinct rows actually
+ * have content there - one wide outlier row can't erase it.
+ */
+function detectColumnBoundaries(lines: OcrWord[][]): number[] {
+  const words = lines.flat();
+  if (words.length === 0) return [];
+  const minX = Math.floor(Math.min(...words.map((w) => w.x0)));
+  const maxX = Math.ceil(Math.max(...words.map((w) => w.x1)));
+  const span = maxX - minX;
+  if (span <= 0) return [];
+  const coverage = new Array<number>(span).fill(0);
+  for (const line of lines) {
+    const touched = new Array<boolean>(span).fill(false);
+    for (const w of line) {
+      const from = Math.max(0, Math.floor(w.x0) - minX);
+      const to = Math.min(span, Math.ceil(w.x1) - minX);
+      for (let x = from; x < to; x++) touched[x] = true;
+    }
+    for (let x = 0; x < span; x++) if (touched[x]) coverage[x]++;
+  }
+  // ponytail: fixed 15%-of-rows outlier tolerance and fixed min-gap width; revisit if a
+  // vendor's table regularly has more than a couple of full-width title/footnote rows.
+  const maxOutlierLines = Math.max(1, Math.floor(lines.length * 0.15));
+  const minGap = Math.max(10, span * 0.015);
+  const boundaries: number[] = [];
+  let gapStart = -1;
+  for (let x = 0; x <= span; x++) {
+    const empty = x < span && coverage[x] <= maxOutlierLines;
+    if (empty) {
+      if (gapStart === -1) gapStart = x;
+    } else {
+      if (gapStart !== -1 && x - gapStart >= minGap) boundaries.push(minX + (gapStart + x) / 2);
+      gapStart = -1;
+    }
+  }
+  return boundaries;
+}
+
+/** Bucket a line's words into columns by which boundary range their center falls in. */
+function wordsToRow(words: OcrWord[], boundaries: number[]): string[] {
+  const cols: string[][] = Array.from({ length: boundaries.length + 1 }, () => []);
+  for (const w of [...words].sort((a, b) => a.x0 - b.x0)) {
+    const cx = (w.x0 + w.x1) / 2;
+    const col = boundaries.findIndex((b) => cx < b);
+    cols[col === -1 ? boundaries.length : col].push(w.text);
+  }
+  return cols.map((c) => c.join(" "));
+}
+
+/** OCR one image block, reconstructing a table grid from word bounding boxes instead of flat text. */
+async function ocrTableBlock(
+  worker: Awaited<ReturnType<typeof import("tesseract.js").createWorker>>,
+  image: Buffer
+): Promise<string[][]> {
+  // small table text (~8-9pt at typical scan resolution) reads far more reliably upscaled first
+  const sharp = (await import("sharp")).default;
+  const srcMeta = await sharp(image).metadata();
+  const upscaled = await sharp(image).resize({ width: Math.round((srcMeta.width ?? 1000) * 3) }).toBuffer();
+  const { data } = await worker.recognize(upscaled, {}, { blocks: true });
+  const words: OcrWord[] = [];
+  for (const block of data.blocks ?? []) {
+    for (const para of block.paragraphs) {
+      for (const line of para.lines) {
+        for (const w of line.words) {
+          const text = w.text.trim();
+          if (text === "" || w.confidence < 40) continue; // low confidence: border-line/signature noise, not real text
+          if (/^[^\p{L}\p{N}]+$/u.test(text)) continue; // pure punctuation: almost always a misread ruled border, not content
+          words.push({ text, confidence: w.confidence, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1 });
+        }
+      }
+    }
+  }
+  const rows = clusterRows(words);
+  const boundaries = detectColumnBoundaries(rows);
+  return rows.map((row) => wordsToRow(row, boundaries)).filter((row) => row.some((c) => c !== ""));
+}
+
 /** OCR fallback for scanned/signed PDFs that have no text layer at all. */
-async function ocrPdfText(buffer: Buffer): Promise<string> {
+async function ocrPdfTable(buffer: Buffer): Promise<string[][]> {
   const images = await extractPageImages(buffer);
   if (images.length === 0) {
     throw new Error(
@@ -153,14 +287,13 @@ async function ocrPdfText(buffer: Buffer): Promise<string> {
   const worker = await createWorker("eng", 1, { cachePath: os.tmpdir() });
   try {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
-    const parts: string[] = [];
+    const matrix: string[][] = [];
     for (const image of images) {
       for (const block of await splitAtColumnGutter(image)) {
-        const { data } = await worker.recognize(block);
-        parts.push(data.text);
+        matrix.push(...(await ocrTableBlock(worker, block)));
       }
     }
-    return parts.join("\n");
+    return matrix;
   } finally {
     await worker.terminate();
   }
@@ -168,29 +301,39 @@ async function ocrPdfText(buffer: Buffer): Promise<string> {
 
 /**
  * PDF parsing: extract text lines and reconstruct a table heuristically.
- * Columns are split on runs of 2+ spaces or tab characters - the delimiter is
- * detected from the document itself, never assumed.
+ * When a real text layer exists, columns are split on runs of 2+ spaces or
+ * tab characters - the delimiter is detected from the document itself, never
+ * assumed. Scanned/signed PDFs have no text layer to split that way, so
+ * their table grid is reconstructed from OCR word geometry instead (see
+ * ocrPdfTable) rather than guessed from spacing in flattened OCR text.
  */
 export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   const pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default as (b: Buffer) => Promise<{ text: string }>;
-  let { text } = await pdfParse(buffer);
-  if (text.trim() === "") {
-    text = await ocrPdfText(buffer); // scanned/signed PDF, no text layer to extract directly
-  }
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.replace(/ /g, " ").trimEnd())
-    .filter((l) => l.trim() !== "");
+  const { text } = await pdfParse(buffer);
 
-  if (lines.length === 0) {
+  let matrix: string[][];
+  if (text.trim() === "") {
+    matrix = await ocrPdfTable(buffer);
+  } else {
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim() !== "");
+    matrix = lines.map((line) => line.split(/\t| {2,}/).map((c) => c.trim()).filter((c, i, arr) => !(c === "" && i === arr.length - 1)));
+  }
+
+  if (matrix.length === 0) {
     throw new Error(
       "No text could be read from this PDF, even with OCR. Try a clearer scan, or provide the data as XLSX/CSV instead."
     );
   }
-  const matrix: string[][] = lines.map((line) => line.split(/\t| {2,}/).map((c) => c.trim()).filter((c, i, arr) => !(c === "" && i === arr.length - 1)));
   const width = matrix.reduce((m, r) => Math.max(m, r.length), 0);
-  // keep only lines that look tabular (at least half of the max width) — the rest is page furniture
-  const tabular = matrix.filter((r) => r.length >= Math.max(2, Math.floor(width / 2)));
+  // keep only rows that look tabular (at least half of the max width actually populated) — the
+  // rest is page furniture (titles, section headers, footnotes). Counts populated cells, not
+  // array length: the OCR path always returns full-width rows padded with empty strings, so a
+  // one-word title row has the same length as a real product row and must be judged by content.
+  const populated = (r: string[]) => r.filter((c) => c !== "").length;
+  const tabular = matrix.filter((r) => populated(r) >= Math.max(2, Math.floor(width / 2)));
   const source = tabular.length >= 3 ? tabular : matrix;
   return { fileType: "pdf", sheets: [sheetFromMatrix("PDF Content", 0, source)] };
 }

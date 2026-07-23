@@ -106,7 +106,7 @@ model MatchResult {
   score         Float        @default(0)
   confidence    Float        @default(0)
   status        String // MATCHED | PARTIAL | NEED_REVIEW | UNMATCHED | MANUAL
-  source        String       @default("ENGINE") // ENGINE | MASTER | MANUAL
+  source        String       @default("ENGINE") // ENGINE | MASTER | MANUAL | AI (LLM validated an ambiguous NEED_REVIEW match)
   candidates    String? // JSON top candidates
   detail        String? // JSON per-signal scores
 

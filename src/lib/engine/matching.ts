@@ -3,6 +3,7 @@ import { safeJson } from "@/lib/utils";
 import { cleanValue } from "@/lib/engine/cleaning";
 import { tokenize, buildIdf, expandCandidates, codeSimilarity, classifyToken } from "@/lib/engine/tokens";
 import { weightedTokenSimilarity, diceCoefficient, levenshteinRatio, otsuThreshold } from "@/lib/engine/similarity";
+import { chatCompletion } from "@/lib/chat/openrouter";
 import type { MatchCandidate } from "@/lib/types";
 
 export interface EngineRow {
@@ -148,6 +149,67 @@ function buildIndex(rows: EngineRow[]): Map<string, number[]> {
     }
   });
   return index;
+}
+
+interface AiVerdict {
+  matched: boolean;
+  candidateIndex: number | null; // 1-based index into the candidate list offered to the model
+  reason: string;
+}
+
+/**
+ * Second-stage validation for a fuzzy-ambiguous match: asks an LLM to judge whether the
+ * vendor line and the engine's top candidates describe the same product, weighing product
+ * code/variant/spec rather than raw text similarity. Generic across every vendor/category -
+ * the candidate list and product names are the only input, nothing is predefined.
+ * Best-effort: any failure (timeout, unparseable reply, all models down) returns null and the
+ * caller keeps the engine's own NEED_REVIEW classification, never blocks the run.
+ */
+async function validateMatchWithAI(vendorLabel: string, vendorCode: string | null, candidates: MatchCandidate[]): Promise<AiVerdict | null> {
+  if (candidates.length === 0) return null;
+  const list = candidates
+    .map((c, i) => `${i + 1}. "${c.label}"${c.code ? ` (code: ${c.code})` : ""} — fuzzy score ${c.score.toFixed(2)}`)
+    .join("\n");
+  const prompt = `You are validating a product price-audit match between a vendor's price list line and a company's internal product catalog.
+
+Vendor line: "${vendorLabel}"${vendorCode ? ` (code: ${vendorCode})` : ""}
+
+Internal catalog candidates:
+${list}
+
+Decide whether the vendor line refers to the SAME product as one of the candidates above. Compare product type code, variant/color/finish suffix and specifications - not just text similarity (the fuzzy scores above are already known to be unreliable on their own here, that's why you're being asked). Two rows that differ only in variant letter (e.g. "-W" vs "-K") or in size/capacity are NOT the same product.
+
+Reply with ONLY a single-line JSON object, no other text: {"match": true or false, "candidate": <1-based number from the list above, or null if none match>, "reason": "<one short sentence>"}`;
+
+  try {
+    const { content } = await chatCompletion([{ role: "user", content: prompt }]);
+    const jsonText = content.match(/\{[\s\S]*\}/)?.[0];
+    if (!jsonText) return null;
+    const parsed = JSON.parse(jsonText);
+    if (typeof parsed.match !== "boolean") return null;
+    const idx = typeof parsed.candidate === "number" ? parsed.candidate : null;
+    return {
+      matched: parsed.match,
+      candidateIndex: idx !== null && idx >= 1 && idx <= candidates.length ? idx : null,
+      reason: typeof parsed.reason === "string" ? parsed.reason : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Runs `fn` over `items` with at most `limit` in flight at once - no queue library needed for this. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 export interface MatchRunStats {
@@ -297,6 +359,36 @@ export async function runMatching(jobId: string, sessionId: string): Promise<voi
   const marginValues = prelims.filter((p) => !p.fromMaster && p.margin > 0).map((p) => p.margin);
   const marginMean = marginValues.length ? marginValues.reduce((a, b) => a + b, 0) / marginValues.length : 0.1;
 
+  const classify = (p: Prelim): string => {
+    if (p.fromMaster) return "MATCHED";
+    if (p.score >= tHigh && p.margin >= marginMean * 0.5) return "MATCHED";
+    if (p.score >= tHigh) return "NEED_REVIEW"; // strong score but ambiguous (competitor too close)
+    if (p.score >= tLow) return p.margin < marginMean * 0.35 ? "NEED_REVIEW" : "PARTIAL";
+    return "UNMATCHED";
+  };
+
+  // Hybrid stage 2: fuzzy screening above already produced a score for every vendor line;
+  // only the ones it left ambiguous (NEED_REVIEW) go to the LLM, so token spend scales with
+  // how much the fuzzy stage actually struggled, not with catalog size.
+  // ponytail: fixed cap + concurrency - revisit if a vendor file regularly needs more AI calls
+  // than this covers (the excess just keeps its engine-only NEED_REVIEW classification).
+  const AI_VALIDATION_CAP = 60;
+  const aiCandidates = prelims.filter((p) => classify(p) === "NEED_REVIEW" && p.candidates.length > 0).slice(0, AI_VALIDATION_CAP);
+  const aiVerdicts = new Map<string, AiVerdict>();
+  if (aiCandidates.length > 0) {
+    await setProgress(87, `AI validation 0/${aiCandidates.length} ambiguous matches`);
+    let done = 0;
+    await mapWithConcurrency(aiCandidates, 4, async (p) => {
+      const v = vRows.find((r) => r.id === p.vendorRowId);
+      const verdict = v ? await validateMatchWithAI(v.nameRaw, v.code, p.candidates) : null;
+      done++;
+      if (done % 5 === 0 || done === aiCandidates.length) {
+        await setProgress(87 + (done / aiCandidates.length) * 3, `AI validation ${done}/${aiCandidates.length} ambiguous matches`);
+      }
+      if (verdict) aiVerdicts.set(p.vendorRowId, verdict);
+    });
+  }
+
   const stats: MatchRunStats = {
     total: prelims.length,
     matched: 0,
@@ -310,42 +402,49 @@ export async function runMatching(jobId: string, sessionId: string): Promise<voi
 
   await setProgress(90, "Saving results");
   const creates = prelims.map((p) => {
-    let status: string;
-    if (p.fromMaster) {
-      status = "MATCHED";
-      stats.matched++;
-      stats.fromMaster++;
-    } else if (p.score >= tHigh && p.margin >= marginMean * 0.5) {
-      status = "MATCHED";
-      stats.matched++;
-    } else if (p.score >= tHigh) {
-      status = "NEED_REVIEW"; // strong score but ambiguous (competitor too close)
-      stats.needReview++;
-    } else if (p.score >= tLow) {
-      if (p.margin < marginMean * 0.35) {
-        status = "NEED_REVIEW";
-        stats.needReview++;
-      } else {
-        status = "PARTIAL";
-        stats.partial++;
+    let status = classify(p);
+    let internalRowId = p.internalRowId;
+    let source = p.fromMaster ? "MASTER" : "ENGINE";
+    let aiNote: string | null = null;
+
+    if (status === "NEED_REVIEW") {
+      const verdict = aiVerdicts.get(p.vendorRowId);
+      if (verdict) {
+        source = "AI";
+        aiNote = verdict.reason;
+        if (verdict.matched && verdict.candidateIndex !== null) {
+          status = "MATCHED";
+          internalRowId = p.candidates[verdict.candidateIndex - 1].rowId;
+        } else {
+          status = "UNMATCHED";
+        }
       }
-    } else {
-      status = "UNMATCHED";
-      stats.unmatched++;
     }
+
+    if (status === "MATCHED") stats.matched++;
+    else if (status === "PARTIAL") stats.partial++;
+    else if (status === "NEED_REVIEW") stats.needReview++;
+    else stats.unmatched++;
+    if (p.fromMaster) stats.fromMaster++;
+
     const confidence = p.fromMaster
       ? 1
-      : Math.max(0, Math.min(1, p.score * (0.6 + 0.4 * Math.min(1, p.margin / Math.max(marginMean, 0.001)))));
+      : source === "AI"
+        ? status === "MATCHED"
+          ? 0.75
+          : 0.25
+        : Math.max(0, Math.min(1, p.score * (0.6 + 0.4 * Math.min(1, p.margin / Math.max(marginMean, 0.001)))));
+    const detail = aiNote ? JSON.stringify({ ...(p.signals ?? {}), aiReason: aiNote }) : p.signals ? JSON.stringify(p.signals) : null;
     return {
       sessionId,
       vendorRowId: p.vendorRowId,
-      internalRowId: status === "UNMATCHED" ? null : p.internalRowId,
+      internalRowId: status === "UNMATCHED" ? null : internalRowId,
       score: Number(p.score.toFixed(4)),
       confidence: Number(confidence.toFixed(4)),
       status,
-      source: p.fromMaster ? "MASTER" : "ENGINE",
+      source,
       candidates: JSON.stringify(p.candidates),
-      detail: p.signals ? JSON.stringify(p.signals) : null,
+      detail,
     };
   });
 
