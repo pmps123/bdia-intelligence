@@ -275,6 +275,103 @@ async function ocrTableBlock(
   return rows.map((row) => wordsToRow(row, boundaries)).filter((row) => row.some((c) => c !== ""));
 }
 
+interface ColumnProfile {
+  numericRatio: number;
+  avgLength: number;
+  nonEmptyRatio: number;
+}
+
+function profileColumn(rows: string[][], col: number): ColumnProfile {
+  const values = rows.map((r) => r[col] ?? "").filter((v) => v !== "");
+  if (values.length === 0 || rows.length === 0) return { numericRatio: 0, avgLength: 0, nonEmptyRatio: 0 };
+  const numeric = values.filter((v) => parseNumeric(v) !== null && /\d/.test(v) && (v.match(/\p{L}/gu) ?? []).length <= 2).length;
+  return {
+    numericRatio: numeric / values.length,
+    avgLength: values.reduce((a, v) => a + v.length, 0) / values.length,
+    nonEmptyRatio: values.length / rows.length,
+  };
+}
+
+function profileSimilarity(a: ColumnProfile, b: ColumnProfile): number {
+  const numDiff = Math.abs(a.numericRatio - b.numericRatio);
+  const lenDiff = Math.abs(a.avgLength - b.avgLength) / Math.max(a.avgLength, b.avgLength, 1);
+  const fillDiff = Math.abs(a.nonEmptyRatio - b.nonEmptyRatio);
+  return 1 - (numDiff * 0.5 + Math.min(lenDiff, 1) * 0.3 + fillDiff * 0.2);
+}
+
+/**
+ * Vendor price lists often wrap one long table across several printed blocks
+ * - two tables side by side because a single column wouldn't fit down the
+ * page, or one table continuing across pages - repeating the same columns
+ * each time. Each OCR block gets its own column boundaries (detectColumnBoundaries
+ * runs per block, since blocks are separate image crops with unrelated pixel
+ * coordinates), so a later block can end up with a different column count or
+ * order than the first even though it's logically the same table - confirmed
+ * against the first real document tested against this, where the second
+ * block's product/price ended up in different column indices and silently
+ * vanished under the first block's column mapping.
+ *
+ * Align every block's columns onto the first block's layout by matching each
+ * column's content profile (numeric ratio, average length, fill ratio),
+ * preferring the same ordinal position when it's already a plausible match
+ * (a repeated print template almost always keeps its column order; content
+ * profile only overrides that when position disagrees with the data, e.g. a
+ * stray extra column shifted everything after it by one). This works for any
+ * vendor's wrapped table - nothing here is Rinnai- or category-specific, and
+ * literal OCR'd header text (which rarely reproduces identically block to
+ * block) is never relied on.
+ */
+function alignBlocksToCommonColumns(blocks: string[][][]): string[][] {
+  const nonEmpty = blocks.filter((b) => b.length > 0);
+  if (nonEmpty.length === 0) return [];
+  const [first, ...rest] = nonEmpty;
+  const canonicalWidth = first.reduce((m, r) => Math.max(m, r.length), 0);
+  const canonicalProfiles = Array.from({ length: canonicalWidth }, (_, c) => profileColumn(first, c));
+
+  const merged: string[][] = [...first];
+  for (const block of rest) {
+    const width = block.reduce((m, r) => Math.max(m, r.length), 0);
+    const profiles = Array.from({ length: width }, (_, c) => profileColumn(block, c));
+    const usedCanonical = new Set<number>();
+    // ponytail: fixed similarity floors (0.45 same-position, 0.55 any-position) for "this is the
+    // same column" - revisit if a vendor's block layout regularly needs a looser/stricter match.
+    const mapping = profiles.map((p, i) => {
+      if (i < canonicalWidth && !usedCanonical.has(i) && profileSimilarity(p, canonicalProfiles[i]) >= 0.45) {
+        usedCanonical.add(i);
+        return i;
+      }
+      let best = -1;
+      let bestScore = 0.55;
+      canonicalProfiles.forEach((cp, ci) => {
+        if (usedCanonical.has(ci)) return;
+        const score = profileSimilarity(p, cp);
+        if (score > bestScore) {
+          bestScore = score;
+          best = ci;
+        }
+      });
+      if (best !== -1) usedCanonical.add(best);
+      return best;
+    });
+    // A column that doesn't confidently match anything in the canonical layout is dropped, not
+    // appended as a new trailing column: on the first real document tested against this, one
+    // malformed OCR row (a two-SKU cell that wrapped across two printed lines) produced exactly
+    // one stray value in an otherwise-empty extra column, and that single "perfectly unique, 100%
+    // filled" phantom column then outscored the real product column in the (unrelated) automatic
+    // column-role detector downstream. A dropped cell loses one field on an already-malformed row;
+    // a phantom column can silently take over the wrong role for the entire merged table.
+    for (const row of block) {
+      const out = new Array<string>(canonicalWidth).fill("");
+      row.forEach((cell, i) => {
+        const target = mapping[i];
+        if (target !== -1 && target !== undefined) out[target] = cell;
+      });
+      merged.push(out);
+    }
+  }
+  return merged;
+}
+
 /** OCR fallback for scanned/signed PDFs that have no text layer at all. */
 async function ocrPdfTable(buffer: Buffer): Promise<string[][]> {
   const images = await extractPageImages(buffer);
@@ -287,13 +384,13 @@ async function ocrPdfTable(buffer: Buffer): Promise<string[][]> {
   const worker = await createWorker("eng", 1, { cachePath: os.tmpdir() });
   try {
     await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
-    const matrix: string[][] = [];
+    const blocks: string[][][] = [];
     for (const image of images) {
       for (const block of await splitAtColumnGutter(image)) {
-        matrix.push(...(await ocrTableBlock(worker, block)));
+        blocks.push(await ocrTableBlock(worker, block));
       }
     }
-    return matrix;
+    return alignBlocksToCommonColumns(blocks);
   } finally {
     await worker.terminate();
   }
@@ -335,7 +432,20 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   const populated = (r: string[]) => r.filter((c) => c !== "").length;
   const tabular = matrix.filter((r) => populated(r) >= Math.max(2, Math.floor(width / 2)));
   const source = tabular.length >= 3 ? tabular : matrix;
-  return { fileType: "pdf", sheets: [sheetFromMatrix("PDF Content", 0, source)] };
+
+  // Drop columns populated in only a sliver of rows: real columns in a price list are populated
+  // throughout, so a column filled in a handful of rows out of dozens is virtually always OCR/
+  // alignment noise (a garbled multi-line cell landing in its own stray column, in the one real
+  // document tested against this) - not a genuine column. Left in, a near-empty-but-unique column
+  // like that can outscore the real product column in the (unrelated) automatic role detector
+  // downstream, since "only ever one distinct value" scores as perfectly unique.
+  const finalWidth = source.reduce((m, r) => Math.max(m, r.length), 0);
+  const keepCols = Array.from({ length: finalWidth }, (_, c) => c).filter(
+    (c) => source.filter((r) => (r[c] ?? "") !== "").length / source.length >= 0.1
+  );
+  const pruned = keepCols.length > 0 ? source.map((r) => keepCols.map((c) => r[c] ?? "")) : source;
+
+  return { fileType: "pdf", sheets: [sheetFromMatrix("PDF Content", 0, pruned)] };
 }
 
 export async function parseUploadedFile(buffer: Buffer, fileName: string): Promise<ParsedFile> {
