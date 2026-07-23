@@ -48,6 +48,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     await prisma.masterMapping.upsert({
       where: { vendorName_vendorKey: { vendorName, vendorKey: vendorRow.nameNorm } },
       update: {
+        vendorCode: vendorRow.code,
         internalKey: internalRow.nameNorm,
         internalLabel: internalRow.nameRaw ?? "",
         internalCode: internalRow.code,
@@ -57,6 +58,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
         vendorName,
         vendorKey: vendorRow.nameNorm,
         vendorLabel: vendorRow.nameRaw ?? "",
+        vendorCode: vendorRow.code,
         internalKey: internalRow.nameNorm,
         internalLabel: internalRow.nameRaw ?? "",
         internalCode: internalRow.code,

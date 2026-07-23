@@ -119,6 +119,10 @@ model MasterMapping {
   vendorName    String   @default("")
   vendorKey     String
   vendorLabel   String
+  // the vendor's own product code, when the matched row had one - a more stable identity than
+  // the full name: the same vendor's next price list rarely spells a product name identically
+  // (reformatted spacing, an added suffix, OCR noise on a rescan) but reissues the same code
+  vendorCode    String?
   internalKey   String
   internalLabel String
   internalCode  String?
@@ -126,6 +130,7 @@ model MasterMapping {
   createdAt     DateTime @default(now())
 
   @@unique([vendorName, vendorKey])
+  @@index([vendorName, vendorCode])
 }
 
 model PriceValidationRun {

@@ -214,4 +214,8 @@ export interface ExportConfig {
   header: string;
   footer: string;
   title: string;
+  /** Any row with one of these substrings in one of its cells (e.g. a vendor's own "*" price-increase marker, or a computed anomaly flag) gets a red background - unset by default. */
+  highlightIfContains?: string[];
+  /** Column keys whose cells always get a red background, regardless of content - unset by default. */
+  highlightColumns?: string[];
 }

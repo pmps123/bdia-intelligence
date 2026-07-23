@@ -2,6 +2,14 @@ import { prisma } from "@/lib/db";
 import { safeJson } from "@/lib/utils";
 import { priceStatusLabel, type MatchCandidate } from "@/lib/types";
 
+// any internal-data header that reads as a product code, whatever the vendor calls it
+// (Prod. Variant Code, Alias Code, SKU, ...) - discovered from the sheet's own headers, never a fixed list
+const CODE_HEADER_RE = /code|kode|sku|part\s*no|artikel|item\s*no/i;
+
+// ponytail: fixed cutoff for "this price change is implausible enough to always double-check" -
+// revisit if legitimate vendor increases regularly exceed this (seen so far: ~18%, well under it)
+const EXTREME_DIFF_PCT = 80;
+
 export interface SourceData {
   name: string;
   columns: string[];
@@ -64,14 +72,42 @@ export async function getSourceData(type: string, id: string): Promise<SourceDat
     const matchResultIds = run.items.map((it) => it.matchResultId).filter((mid): mid is string => mid !== null);
     const matchResults = await prisma.matchResult.findMany({
       where: { id: { in: matchResultIds } },
-      select: { id: true, status: true, confidence: true },
+      select: { id: true, status: true, confidence: true, source: true, detail: true },
     });
     const matchById = new Map(matchResults.map((m) => [m.id, m]));
+
+    // pull in whatever "code" columns the internal sheet actually has (Prod. Variant Code, Alias
+    // Code, SKU, ...) - discovered from the internal dataset's own original headers, not a fixed
+    // list, so it works for any vendor's data
+    const internalRowIds = [...new Set(run.items.map((it) => it.internalRowId).filter((rid): rid is string => rid !== null))];
+    const internalRows = internalRowIds.length > 0 ? await prisma.dataRow.findMany({ where: { id: { in: internalRowIds } } }) : [];
+    const internalDataById = new Map(internalRows.map((r) => [r.id, safeJson<Record<string, string>>(r.data, {})]));
+    const codeHeaders: string[] = [];
+    const seenHeaders = new Set<string>();
+    for (const data of internalDataById.values()) {
+      for (const key of Object.keys(data)) {
+        if (CODE_HEADER_RE.test(key) && !seenHeaders.has(key)) {
+          seenHeaders.add(key);
+          codeHeaders.push(key);
+        }
+      }
+    }
+
     const out = run.items.map((it) => {
       const m = it.matchResultId ? matchById.get(it.matchResultId) : undefined;
-      return {
-        "Vendor Product": it.vendorLabel,
+      const internalData = it.internalRowId ? internalDataById.get(it.internalRowId) : undefined;
+      // the AI's own one-sentence reason, when it was the one that made the call on an ambiguous
+      // match - the detail blob is {...signals} normally, {...signals, aiReason} when AI ran
+      const aiReason = m?.detail ? safeJson<{ aiReason?: string }>(m.detail, {}).aiReason : undefined;
+      const row: Record<string, unknown> = {
+        // combine the vendor's own code with the actual matched internal product name, so the
+        // column reads clearly on its own instead of a bare code - falls back to the raw vendor
+        // label when there's no internal match to combine it with
+        "Vendor Product": it.internalLabel ? `${it.vendorLabel} - ${it.internalLabel}` : it.vendorLabel,
         "Internal Product": it.internalLabel,
+      };
+      for (const header of codeHeaders) row[header] = internalData?.[header] ?? "";
+      Object.assign(row, {
         "Vendor Price": it.vendorPrice ?? "",
         "Internal Price": it.internalPrice ?? "",
         // the updated price always takes the vendor price
@@ -82,7 +118,16 @@ export async function getSourceData(type: string, id: string): Promise<SourceDat
         "Price Status": priceStatusLabel(it.status),
         "Matching Status": m?.status ?? "",
         Confidence: m ? Number((m.confidence * 100).toFixed(0)) / 100 : "",
-      };
+        // where this match came from: MASTER (remembered from a past manual confirm), AI
+        // (validated an ambiguous fuzzy match), ENGINE (fuzzy match alone), MANUAL (auditor set it)
+        "Match Source": m?.source ?? "",
+        "Match Note": aiReason ?? "",
+        // flagged independent of match confidence: a >80% price swing is worth a manual look
+        // regardless of how sure the matching engine is - it might be a real event, or it might
+        // be a wrong match or a misread number, and either way an auditor should see it
+        "Price Alert": it.diffPct !== null && Math.abs(it.diffPct) >= EXTREME_DIFF_PCT ? "Cek Manual - Perubahan Ekstrem" : "",
+      });
+      return row;
     });
     return { name: run.name, columns: unionColumns(out), rows: out };
   }

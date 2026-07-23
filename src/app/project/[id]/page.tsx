@@ -98,10 +98,27 @@ const EMPTY_ROLES: Roles = { product: null, code: null, price: null, category: n
 const STEPS = ["Internal File", "Vendor File", "Detection", "Review", "Prices", "Export"] as const;
 const stepIndex = (step: string) => ({ internal: 0, vendor: 1, detect: 2, review: 3, price: 4, export: 5 }[step] ?? 0);
 
-/** Export columns adapt to the selected internal price source. */
-const exportColumns = (sourceLabel: string) => [
+// any internal-data header that reads as a product code, whatever the vendor calls it
+// (Prod. Variant Code, Alias Code, SKU, ...) - discovered from the sheet's own headers, never a fixed list
+const CODE_HEADER_RE = /code|kode|sku|part\s*no|artikel|item\s*no/i;
+
+function codeColumnsFor(headers: string[] | undefined): { key: string; title: string }[] {
+  const seen = new Set<string>();
+  const out: { key: string; title: string }[] = [];
+  for (const h of headers ?? []) {
+    if (CODE_HEADER_RE.test(h) && !seen.has(h)) {
+      seen.add(h);
+      out.push({ key: h, title: h });
+    }
+  }
+  return out;
+}
+
+/** Export columns adapt to the selected internal price source, plus whatever code columns the internal sheet has. */
+const exportColumns = (sourceLabel: string, internalHeaders?: string[]) => [
   { key: "Vendor Product", title: "Vendor Product" },
   { key: "Internal Product", title: `Internal Product (${sourceLabel})` },
+  ...codeColumnsFor(internalHeaders),
   { key: "Vendor Price", title: "Vendor Price" },
   { key: "Internal Price", title: `Internal Price (${sourceLabel})` },
   { key: "Updated Price", title: "Updated Price" },
@@ -111,6 +128,9 @@ const exportColumns = (sourceLabel: string) => [
   { key: "Price Status", title: "Price Status" },
   { key: "Matching Status", title: "Matching Status" },
   { key: "Confidence", title: "Confidence" },
+  { key: "Match Source", title: "Match Source" },
+  { key: "Match Note", title: "Match Note" },
+  { key: "Price Alert", title: "Price Alert" },
 ];
 
 function rolesFromSuggestion(sheet: SheetSuggestion | undefined): Roles {
@@ -170,8 +190,14 @@ export default function ProjectPage() {
     }
     const d: ProjectState = await res.json();
     setState(d);
-    // export column titles follow the selected internal price source
-    setCols((c) => (c.length ? c : exportColumns(priceSourceLabel(d.project.priceSource)).map((x) => ({ ...x, include: true }))));
+    // export column titles follow the selected internal price source, plus whatever code
+    // columns the (auto-suggested) internal sheet has
+    setCols((c) => {
+      if (c.length) return c;
+      const bestName = d.internal?.suggestions[0]?.name;
+      const internalHeaders = d.internal?.sheets.find((s) => s.name === bestName)?.headers;
+      return exportColumns(priceSourceLabel(d.project.priceSource), internalHeaders).map((x) => ({ ...x, include: true }));
+    });
     // preselect detection suggestions
     if (d.internal) {
       const best = d.internal.suggestions[0];
@@ -318,6 +344,11 @@ export default function ProjectPage() {
           header: "",
           footer: "",
           title: state.project.name,
+          // vendors commonly mark their own price-increase rows with "*"/"**" in the product
+          // code, and "Cek Manual" is the computed extreme-price-swing flag - both make a row red
+          highlightIfContains: ["*", "Cek Manual"],
+          // vendor product name always stands out red, for quick visual scanning of the download
+          highlightColumns: ["Vendor Product"],
         },
       }),
     });

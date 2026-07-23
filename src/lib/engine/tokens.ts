@@ -57,6 +57,11 @@ export function sharedCodeTokens(a: string[], b: string[]): string[] {
   return b.filter((t) => codesA.has(t));
 }
 
+/** Canonical form of a product code: case/spacing/punctuation never distinguish two codes. */
+export function cleanCode(s: string): string {
+  return s.normalize("NFKC").toUpperCase().replace(/[^\p{L}\p{N}]/gu, "");
+}
+
 /**
  * Code-identity signal between a vendor and internal row.
  *
@@ -73,7 +78,6 @@ export function codeSimilarity(
   iCode: string | null,
   iTokens: string[]
 ): { score: number; weight: number } {
-  const cleanCode = (s: string) => s.normalize("NFKC").toUpperCase().replace(/[^\p{L}\p{N}]/gu, "");
   const vCodeTokens = vTokens.filter((t) => classifyToken(t) !== "word");
   const iCodeTokens = iTokens.filter((t) => classifyToken(t) !== "word");
 

@@ -74,6 +74,7 @@ export async function exportExcel(input: ExportInput): Promise<Buffer> {
     rowCursor += 2;
   }
 
+  const headerRowNumber = rowCursor;
   const headerRow = ws.getRow(rowCursor);
   columns.forEach((c, i) => {
     const cell = headerRow.getCell(i + 1);
@@ -84,6 +85,11 @@ export async function exportExcel(input: ExportInput): Promise<Buffer> {
     ws.getColumn(i + 1).width = c.width;
   });
   rowCursor++;
+  // header stays visible while scrolling, and is sortable/filterable out of the box
+  ws.views = [{ state: "frozen", ySplit: headerRowNumber }];
+  if (columns.length > 0) {
+    ws.autoFilter = { from: { row: headerRowNumber, column: 1 }, to: { row: headerRowNumber, column: columns.length } };
+  }
 
   const numCols = numericColumns(columns, rows);
   let currentGroup: string | null = null;
@@ -100,9 +106,18 @@ export async function exportExcel(input: ExportInput): Promise<Buffer> {
       }
     }
     const row = ws.getRow(rowCursor);
+    const needles = cfg.highlightIfContains ?? [];
+    const rowHighlight = needles.length > 0 && Object.values(r).some((v) => {
+      const s = String(v ?? "");
+      return needles.some((needle) => s.includes(needle));
+    });
     columns.forEach((c, i) => {
       const v = r[c.key];
-      row.getCell(i + 1).value = numCols.has(c.key) && v !== "" && v !== null && v !== undefined ? Number(v) : ((v as ExcelJS.CellValue) ?? "");
+      const cell = row.getCell(i + 1);
+      cell.value = numCols.has(c.key) && v !== "" && v !== null && v !== undefined ? Number(v) : ((v as ExcelJS.CellValue) ?? "");
+      if (rowHighlight || cfg.highlightColumns?.includes(c.key)) {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFECACA" } };
+      }
     });
     rowCursor++;
   }

@@ -51,7 +51,30 @@ function detectHeader(matrix: string[][]): { headerRowIndex: number; headers: st
   return { headerRowIndex: bestIdx, headers };
 }
 
-function sheetFromMatrix(name: string, index: number, matrix: string[][], opts?: { skipHeaderDetection?: boolean }): ParsedSheet {
+/**
+ * A safer header pick for OCR-reconstructed tables, where every row otherwise looks alike (a
+ * code plus a couple of numbers) and the generic headerScore heuristic can mistake an ordinary
+ * product row for the header - silently discarding every row above it, which happened on the
+ * first real document tested against this. A genuine header for this kind of price list never
+ * has a price in it; almost every real data row does. Only strip a row as "the header" when every
+ * one of its populated cells is non-numeric, and only within the first few rows - a genuine
+ * header is always right at the top, and restricting the window keeps an ordinary product row
+ * whose price columns happened to fail OCR from being mistaken for one further down.
+ */
+function detectSafeOcrHeader(matrix: string[][]): { headerRowIndex: number; headers: string[] } | null {
+  const scan = Math.min(matrix.length, 5);
+  for (let i = 0; i < scan; i++) {
+    const row = matrix[i];
+    const populated = row.filter((c) => c !== "");
+    if (populated.length < 2) continue;
+    if (populated.every((c) => parseNumeric(c) === null)) {
+      return { headerRowIndex: i, headers: row.map((h, ci) => (h !== "" ? h : `Column ${ci + 1}`)) };
+    }
+  }
+  return null;
+}
+
+function sheetFromMatrix(name: string, index: number, matrix: string[][], opts?: { useSafeOcrHeader?: boolean }): ParsedSheet {
   // drop fully empty rows and trailing empty columns
   const cleaned = matrix.filter((r) => r.some((c) => c !== ""));
   const width = cleaned.reduce((m, r) => Math.max(m, r.length), 0);
@@ -63,7 +86,12 @@ function sheetFromMatrix(name: string, index: number, matrix: string[][], opts?:
   if (normalized.length === 0) {
     return { name, index, rowCount: 0, columnCount: 0, headers: [], headerRowIndex: 0, rows: [] };
   }
-  if (opts?.skipHeaderDetection) {
+  if (opts?.useSafeOcrHeader) {
+    const safe = detectSafeOcrHeader(normalized);
+    if (safe) {
+      const rows = normalized.slice(safe.headerRowIndex + 1);
+      return { name, index, rowCount: rows.length, columnCount: width, headers: safe.headers, headerRowIndex: safe.headerRowIndex, rows };
+    }
     const headers = Array.from({ length: width }, (_, i) => `Column ${i + 1}`);
     return { name, index, rowCount: normalized.length, columnCount: width, headers, headerRowIndex: -1, rows: normalized };
   }
@@ -209,7 +237,18 @@ function wordsToRow(words: OcrWord[], boundaries: number[]): string[] {
     const col = boundaries.findIndex((b) => cx < b);
     cols[col === -1 ? boundaries.length : col].push(w.text);
   }
-  return cols.map((c) => c.join(" "));
+  return cols.map((fragments) => {
+    // A price that OCR split into two word fragments (a stray gap detected mid-number) must not
+    // be joined with a space: parseNumeric strips whitespace before parsing, so "2.057 490" turns
+    // into "2.057490" and the trailing group is read as decimal digits instead of another
+    // thousands-group - a 1,000x error, confirmed against the first real document tested against
+    // this. Every fragment being digits-and-separators-only means this is one broken-up number,
+    // not several cells - concatenate their bare digits directly instead of guessing a separator.
+    if (fragments.length > 1 && fragments.every((f) => /^[\d.,]+$/.test(f))) {
+      return fragments.map((f) => f.replace(/[.,]/g, "")).join("");
+    }
+    return fragments.join(" ");
+  });
 }
 
 /**
@@ -236,11 +275,33 @@ function detectRowBands(px: Buffer, width: number, height: number): { top: numbe
   for (const y of peaks) if (y - boundaries[boundaries.length - 1] > 5) boundaries.push(y);
   boundaries.push(height);
 
-  const bands: { top: number; bottom: number }[] = [];
+  const rawBands: { top: number; bottom: number }[] = [];
   for (let i = 0; i < boundaries.length - 1; i++) {
     const top = Math.max(0, boundaries[i] - 3);
     const bottom = Math.min(height, boundaries[i + 1] + 3);
-    if (bottom - top >= 6) bands.push({ top, bottom });
+    if (bottom - top >= 6) rawBands.push({ top, bottom });
+  }
+
+  // Rows that abut with no ruled line and no real gap between them (confirmed on the densest
+  // section of the first real document tested against this: ~10 product rows packed with zero
+  // detectable boundary between any of them) leave one huge band with no internal peaks at all -
+  // and OCR-ing a many-row region as if it were one line returns nothing. A typical single-row
+  // height is already known from every band elsewhere in this same image; a band several times
+  // that tall, and not simply blank margin, almost certainly hides that many un-detected rows -
+  // mechanically re-slice it into even-height pieces instead of losing the whole region.
+  const heights = rawBands.map((b) => b.bottom - b.top).sort((a, b) => a - b);
+  const typical = heights[Math.floor(heights.length * 0.4)] ?? 0;
+  const bands: { top: number; bottom: number }[] = [];
+  for (const b of rawBands) {
+    const h = b.bottom - b.top;
+    const avgInk = rowFrac.slice(b.top, b.bottom).reduce((a, v) => a + v, 0) / Math.max(1, h);
+    if (typical > 0 && h > typical * 1.8 && avgInk > 0.02) {
+      const n = Math.max(1, Math.round(h / typical));
+      const step = h / n;
+      for (let k = 0; k < n; k++) bands.push({ top: Math.round(b.top + k * step), bottom: Math.round(b.top + (k + 1) * step) });
+    } else {
+      bands.push(b);
+    }
   }
   return bands;
 }
@@ -474,7 +535,7 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   // it - several genuine products - silently vanished (rows before headerRowIndex are discarded).
   // Skipping header detection for OCR output only avoids that; a real text-layer PDF table keeps
   // normal header detection, since its structure is exact, not reconstructed.
-  return { fileType: "pdf", sheets: [sheetFromMatrix("PDF Content", 0, pruned, { skipHeaderDetection: isOcr })] };
+  return { fileType: "pdf", sheets: [sheetFromMatrix("PDF Content", 0, pruned, { useSafeOcrHeader: isOcr })] };
 }
 
 export async function parseUploadedFile(buffer: Buffer, fileName: string): Promise<ParsedFile> {

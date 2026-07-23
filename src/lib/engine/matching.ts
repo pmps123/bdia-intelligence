@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { safeJson } from "@/lib/utils";
 import { cleanValue } from "@/lib/engine/cleaning";
-import { tokenize, buildIdf, expandCandidates, codeSimilarity, classifyToken } from "@/lib/engine/tokens";
+import { tokenize, buildIdf, expandCandidates, codeSimilarity, classifyToken, cleanCode } from "@/lib/engine/tokens";
 import { weightedTokenSimilarity, diceCoefficient, levenshteinRatio, otsuThreshold } from "@/lib/engine/similarity";
 import { chatCompletion } from "@/lib/chat/openrouter";
 import type { MatchCandidate } from "@/lib/types";
@@ -249,10 +249,19 @@ export async function runMatching(jobId: string, sessionId: string): Promise<voi
     where: { OR: [{ vendorName }, { vendorName: "" }] },
   });
   const masterByKey = new Map<string, (typeof masters)[number]>();
+  // secondary lookup by the vendor's own product code: the same vendor's next price list rarely
+  // spells a product name identically (reformatted spacing, an added suffix, OCR noise on a
+  // rescan), but reissues the same code - falls back to this when the name lookup misses.
+  const masterByCode = new Map<string, (typeof masters)[number]>();
   for (const m of masters) {
     // vendor-specific mapping takes precedence over the generic one
     const existing = masterByKey.get(m.vendorKey);
     if (!existing || (existing.vendorName === "" && m.vendorName !== "")) masterByKey.set(m.vendorKey, m);
+    if (m.vendorCode) {
+      const codeKey = cleanCode(m.vendorCode);
+      const existingByCode = masterByCode.get(codeKey);
+      if (!existingByCode || (existingByCode.vendorName === "" && m.vendorName !== "")) masterByCode.set(codeKey, m);
+    }
   }
   const internalByKey = new Map<string, EngineRow>();
   for (const r of iRows) internalByKey.set(r.nameNorm, r);
@@ -274,8 +283,9 @@ export async function runMatching(jobId: string, sessionId: string): Promise<voi
       await setProgress(12 + (vi / Math.max(vRows.length, 1)) * 70, `Matching ${vi + 1}/${vRows.length}`);
     }
 
-    // 1) learning engine: approved master mapping wins immediately
-    const master = masterByKey.get(v.nameNorm);
+    // 1) learning engine: approved master mapping wins immediately - by name first, then by the
+    // vendor's own code if the name doesn't match this time
+    const master = masterByKey.get(v.nameNorm) ?? (v.code ? masterByCode.get(cleanCode(v.code)) : undefined);
     if (master) {
       const hit = internalByKey.get(master.internalKey);
       if (hit) {
