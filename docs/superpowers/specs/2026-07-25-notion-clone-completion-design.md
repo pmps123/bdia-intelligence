@@ -14,7 +14,7 @@ Reading the actual codebase (as of commit `19e70be`, "mulai fokus project manage
 **Decisions confirmed with the user:**
 - Migrate **all** Prisma models to Supabase Postgres (not just `Page`/`Block`), preserving existing local data. App keeps running locally (`npm start`/`npm run dev`) — no Vercel redeploy in this scope.
 - Price Audit/Sales Dashboard/Salesman keep their current local-disk file storage and SQLite-CRUD-shaped access patterns; only Notes/Blocks attachments move to Supabase Storage.
-- `BQ_KEY_FILE` maps to the new `pipamas-83893e7fd607.json` key, scoped to Notes' database-view blocks querying pipeline data — independent of the existing v2/v3 keys the Python scripts already use (per `[[bdia-app-context]]` memory, do not set `BQ_PROJECT_ID`/`BQ_KEY_FILE` globally in a way that overrides those).
+- BigQuery credential mapping is **postponed** — the `database_view` block ships without a "connect to a pipeline dataset" option for now; it's Table/Board/Gallery/List/Dashboard/Calendar/Timeline over the block's own stored rows only, same as the existing `table` block today. Revisit `BQ_KEY_FILE`/`pipamas-83893e7fd607.json` wiring later.
 - Build real support for the full ~30 slash-menu block types, not a trimmed subset.
 - Project-management (Kanban/List/TaskDetailDrawer, already partially wired into table-block views) resumes only after the above is done.
 
@@ -30,15 +30,10 @@ Reading the actual codebase (as of commit `19e70be`, "mulai fokus project manage
 
 - Add a small Supabase client helper (`src/lib/supabase.ts`) using `SUPABASE_SERVICE_ROLE_KEY` server-side only — uploads go through an API route, not directly from the browser, so the service key never reaches the client.
 - New route `src/app/api/blocks/upload/route.ts`: accepts a file, uploads to a Supabase Storage bucket (e.g. `note-attachments`), returns the public/signed URL.
-- `ImageBlockView`'s existing "Upload" button switches from `FileReader`→base64 to calling this route. Same pattern extends to the new `video` and `file` block types (Stage 4).
+- `ImageBlockView`'s existing "Upload" button switches from `FileReader`→base64 to calling this route. Same pattern extends to the new `video` and `file` block types (Stage 3).
 - No change to Price Audit's upload path (`storage/uploads` on local disk) — deliberately out of scope per the user's decision to keep that on local disk.
 
-## Stage 3 — BigQuery env mapping
-
-- `.env`: add `BQ_KEY_FILE="Z:\Rafli\bdia app\pipamas-83893e7fd607.json"`, scoped for use only by the Notes database-view block's query path (Stage 4) — not set as a project-wide override, so it doesn't affect the existing v2/v3-keyed Python pipeline scripts.
-- No BigQuery client code needs building beyond what a `database_view` block's "connect to a pipeline dataset" option requires (Stage 4) — this stage is just the credential plumbing so that feature has something to point at.
-
-## Stage 4 — Full slash-menu block-type buildout
+## Stage 3 — Full slash-menu block-type buildout
 
 Currently `BlockType = "text" | "heading" | "bullet" | "table" | "image"`. Target: every group in `SLASH_MENU_GROUPS` produces a real, rendering, persistable block. Design choice: **collapse variants that differ only by a parameter into one `BlockType` with a content field**, rather than one `BlockType` string per slash-menu item — matches the existing pattern (`TableBlockContent.tables[].views[]` already does this for Table/Board/List/Timeline) and avoids 30 near-duplicate React components.
 
@@ -73,9 +68,9 @@ Currently `BlockType = "text" | "heading" | "bullet" | "table" | "image"`. Targe
 - `TextBlockView`'s own hardcoded `SLASH_OPTIONS` list is deleted; `/` inside a text block now opens the real `slash-menu.tsx` component (already built, just needs to be the one thing actually invoked), filtered by whatever's typed after `/`.
 - Nested-content types (`toggle`, `columns`) store their children inline in the parent block's JSON `content` rather than as separate `Block` rows with a `parentBlockId` — avoids a second self-relation on top of `Page`'s existing one, keeps ordering/reordering logic scoped to a single block's local array instead of a second recursive tree. Reasonable for the shallow nesting these types need (a toggle's contents, a column's contents) — would need revisiting only if columns-within-columns or multi-level toggle nesting shows up as a real requirement.
 
-## Stage 5 — Project-management thread (deferred, not designed here)
+## Stage 4 — Project-management thread (deferred, not designed here)
 
-`KanbanView`/`ListView`/`TaskDetailDrawer` already exist and are wired as views inside `TableBlockView` (Board/List view types, row-click opens the drawer). This appears to already satisfy the immediate task-tracking need through the `database_view` block from Stage 4 — no separate "Project" data model exists or is proposed. Whether this needs to grow into something more (assignees, due-date notifications, cross-page rollups) is explicitly **not** designed here; the earlier approved spec (`nested-notes-pages-design.md`) descoped it once already, and per the user's sequencing decision this only gets picked up, and re-scoped if needed, after Stages 1-4 ship.
+`KanbanView`/`ListView`/`TaskDetailDrawer` already exist and are wired as views inside `TableBlockView` (Board/List view types, row-click opens the drawer). This appears to already satisfy the immediate task-tracking need through the `database_view` block from Stage 3 — no separate "Project" data model exists or is proposed. Whether this needs to grow into something more (assignees, due-date notifications, cross-page rollups) is explicitly **not** designed here; the earlier approved spec (`nested-notes-pages-design.md`) descoped it once already, and per the user's sequencing decision this only gets picked up, and re-scoped if needed, after Stages 1-3 ship.
 
 ## Out of scope (deliberately deferred)
 
@@ -83,10 +78,10 @@ Currently `BlockType = "text" | "heading" | "bullet" | "table" | "image"`. Targe
 - Migrating Price Audit/Sales Dashboard/Salesman's file storage off local disk.
 - Rich inline text formatting (bold/italic/inline links within a single text block) — every block type above is still block-level content, matching the current editor's model.
 - Multi-level nesting for `toggle`/`columns` beyond one level deep.
-- Any new BigQuery client/query-builder work beyond credential plumbing — the actual "query a pipeline dataset from a database_view block" UI is real scope but its detailed design (which pipelines, what query surface) needs its own follow-up pass once Stage 4's block plumbing exists to hang it on.
+- BigQuery credential mapping and any "query a pipeline dataset from a database_view block" capability — postponed per the user's decision; `database_view` ships as views over the block's own stored rows only. Revisit `BQ_KEY_FILE`/`pipamas-83893e7fd607.json` wiring as its own follow-up once this is prioritized again.
 
 ## Testing
 
 - Stage 1: data-migration script is a one-shot, run-once operation — verify row counts match between sqlite source and Postgres destination per table before switching `DATABASE_URL` over for good.
 - Stage 2: manual upload of an image/file/video block, confirm the Storage URL persists and reloads correctly.
-- Stage 4: manual pass creating one block of every new type, confirming persistence (reload the page) and that reordering/deleting still works for the expanded type list. Table/Board/Gallery/List/Dashboard/Calendar/Timeline all verified through the same `database_view` block by switching view tabs, consistent with how Table/Board/List/Timeline already work today.
+- Stage 3: manual pass creating one block of every new type, confirming persistence (reload the page) and that reordering/deleting still works for the expanded type list. Table/Board/Gallery/List/Dashboard/Calendar/Timeline all verified through the same `database_view` block by switching view tabs, consistent with how Table/Board/List/Timeline already work today.
