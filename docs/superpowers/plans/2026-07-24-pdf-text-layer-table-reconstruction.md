@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Progress (updated as tasks complete via subagent-driven-development):** Task 1 ✅ complete, reviewed clean. Task 2 ✅ complete, reviewed clean. Tasks 3-9: see `- [ ]` checkboxes below and `.superpowers/sdd/progress.md` (local, gitignored ledger) for the authoritative up-to-the-minute status.
+
 **Goal:** Replace the whitespace-guessing column splitter for text-layer PDFs with one that reconstructs tables from the PDF's real per-character x/y positions, so vendor PDFs whose extracted text has no reliable spacing (headers currently come out as mashed digits or letterhead addresses) parse correctly.
 
 **Architecture:** A new module (`table-reconstruction.ts`) holds source-agnostic position→table primitives (already proven in the OCR path, just renamed/relocated so both paths can share them). A second new module (`pdf-text-layer.ts`) uses `pdf-parse`'s per-item positions (currently discarded) to build row/column structure, merge wrapped header lines, and backfill spanning-cell labels. `file-parser.ts`'s `parsePdf` tries this path first for non-scanned PDFs and falls back to today's whitespace-split behavior if it can't produce a usable result.
@@ -31,7 +33,7 @@ The existing test scripts (`test/engine-check.ts`, `test/test-rinnai-e2e.ts`) do
 **Interfaces:**
 - Produces: `node test/run.mjs <path/to/script.ts>` — the standard way every later task in this plan runs a `.ts` test script. Run from the project root (`Z:\Rafli\bdia app`).
 
-- [ ] **Step 1: Add `jiti` as a devDependency**
+- [x] **Step 1: Add `jiti` as a devDependency**
 
 Open `package.json`. In the `"devDependencies"` object, the entries are alphabetically ordered. Insert `"jiti": "^2.7.0",` right after `"@types/react-dom": "^19.1.0",` and before `"prisma": "^6.7.0",`:
 
@@ -50,12 +52,12 @@ Open `package.json`. In the `"devDependencies"` object, the entries are alphabet
   }
 ```
 
-- [ ] **Step 2: Run install to lock it in `package-lock.json`**
+- [x] **Step 2: Run install to lock it in `package-lock.json`**
 
 Run: `npm install --package-lock-only`
 Expected: exits 0, `package-lock.json` gets a diff adding `jiti`. (`--package-lock-only` skips reinstalling `node_modules`, which already has `jiti` present as a transitive dependency — this just records it as a direct one.)
 
-- [ ] **Step 3: Create the runner**
+- [x] **Step 3: Create the runner**
 
 Create `test/run.mjs`:
 
@@ -74,7 +76,7 @@ const jiti = createJiti(import.meta.url, {
 await jiti.import(resolve(process.cwd(), target));
 ```
 
-- [ ] **Step 4: Verify it works against the existing self-check (this is also your pre-change regression baseline)**
+- [x] **Step 4: Verify it works against the existing self-check (this is also your pre-change regression baseline)**
 
 Run: `node test/run.mjs test/engine-check.ts`
 Expected: prints `engine-check OK` and exits 0.
@@ -84,7 +86,7 @@ Expected: exits 0, prints a `VENDOR / BEST INTERNAL MATCH / SCORE / STATUS / ...
 
 Note: this second command depends on two files sitting in the project root: `Pricelist Rinnai 3H Zona 1 efektif 22 JULI 2026 REV signed.pdf` and `Rinnai 3H BP (1784774419220).xlsx`. If they're not there (they're local business files, not committed to git), check `Data Vendor/` or ask the user where they've moved to — the script's `main()` function has the exact filenames it expects.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add package.json package-lock.json test/run.mjs
@@ -106,7 +108,7 @@ git commit -m "Add jiti-based test runner (existing tsc+node instructions don't 
 **Interfaces:**
 - Produces: `PositionedWord` (interface: `{ text: string; confidence?: number; x0: number; x1: number; y0: number; y1: number }`), `parseNumeric(value: string | null | undefined): number | null`, `detectColumnBoundaries(lines: PositionedWord[][]): number[]`, `wordsToRow(words: PositionedWord[], boundaries: number[]): string[]`, `alignBlocksToCommonColumns(blocks: string[][][]): string[][]` — all exported from `src/lib/parse/table-reconstruction.ts`. Tasks 3-9 import from here, not from `file-parser.ts`.
 
-- [ ] **Step 1: Create `table-reconstruction.ts`**
+- [x] **Step 1: Create `table-reconstruction.ts`**
 
 ```ts
 /**
@@ -343,7 +345,7 @@ export function alignBlocksToCommonColumns(blocks: string[][][]): string[][] {
 }
 ```
 
-- [ ] **Step 2: Remove the moved code from `file-parser.ts`**
+- [x] **Step 2: Remove the moved code from `file-parser.ts`**
 
 Open `src/lib/parse/file-parser.ts`. Delete these five blocks exactly as they appear (use Read + Edit, matching the exact current text — don't guess at line numbers, they've shifted during earlier sessions):
 
@@ -481,7 +483,7 @@ Delete this whole block.
 
 **Block E** — `alignBlocksToCommonColumns` and its doc comment (the big one starting `/** * Vendor price lists often wrap...`, ending right before `/** OCR fallback for scanned/signed PDFs...`). Delete the whole function and its comment, from the `/**` that starts "Vendor price lists often wrap..." down through the closing `}` of `alignBlocksToCommonColumns`.
 
-- [ ] **Step 3: Add the import + re-export at the top of `file-parser.ts`**
+- [x] **Step 3: Add the import + re-export at the top of `file-parser.ts`**
 
 Find this line near the top of the file:
 ```ts
@@ -499,11 +501,11 @@ import { PositionedWord, detectColumnBoundaries, wordsToRow, alignBlocksToCommon
 export { parseNumeric };
 ```
 
-- [ ] **Step 4: Remove the now-duplicate `parseNumeric` definition**
+- [x] **Step 4: Remove the now-duplicate `parseNumeric` definition**
 
 At the bottom of `file-parser.ts`, delete the old `export function parseNumeric(...) {...}` block (everything from `/** Parse a numeric value...` doc comment through its closing `}`) — it's now imported from `table-reconstruction.ts` and re-exported via Step 3.
 
-- [ ] **Step 5: Rename remaining `OcrWord` references to `PositionedWord`**
+- [x] **Step 5: Rename remaining `OcrWord` references to `PositionedWord`**
 
 The functions that stay in `file-parser.ts` (`extractHeaderLabels`, `recognizeRowWords`, `ocrTableBlock`) still reference the type by its old name. Since the interface itself moved out (Step 2, Block A) and is now imported as `PositionedWord` (Step 3), every remaining `OcrWord` in the file is now an unresolvable type reference and must become `PositionedWord`.
 
@@ -516,12 +518,12 @@ Replace every one of them: `OcrWord` → `PositionedWord`. (Use Edit with `repla
 Run: `grep -n "OcrWord" "src/lib/parse/file-parser.ts"`
 Expected: no output (zero matches).
 
-- [ ] **Step 6: Typecheck**
+- [x] **Step 6: Typecheck**
 
 Run: `npx tsc --noEmit -p .`
 Expected: same 4 pre-existing errors as the Global Constraints section notes (in `route.ts` and `matching.ts`, about `vendorCode`), nothing from `file-parser.ts` or `table-reconstruction.ts`.
 
-- [ ] **Step 7: Regression check — output must be byte-identical to Task 1's baseline**
+- [x] **Step 7: Regression check — output must be byte-identical to Task 1's baseline**
 
 Run: `node test/run.mjs test/engine-check.ts`
 Expected: `engine-check OK`.
@@ -529,7 +531,7 @@ Expected: `engine-check OK`.
 Run: `node test/run.mjs test/test-rinnai-e2e.ts`
 Expected: the exact same summary line you recorded in Task 1 Step 4 (e.g. `matched=34 need_review=6 partial=7 unmatched=10`) and the exact same per-row output. This confirms the move changed nothing about OCR-path behavior.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/lib/parse/table-reconstruction.ts src/lib/parse/file-parser.ts
