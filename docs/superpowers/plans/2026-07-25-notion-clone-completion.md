@@ -15,6 +15,100 @@
 - BigQuery credential mapping is postponed — `database_view` blocks ship as views over the block's own stored rows only, no pipeline-query capability. (Spec: Out of scope)
 - Stop the local Next.js dev/prod server before any `prisma generate`/`prisma db push` (Windows file-lock convention already used in this project).
 - Preserve every existing row across the migration (Project, Upload, Worksheet, Dataset, DataRow, MatchSession, MatchResult, MasterMapping, PriceValidationRun, PriceValidationItem, TransformRun, SalesmanRow, ChatMessage, Job, plus the old `Note`/`Block` rows converted into the new `Page`/`Block` shape) — nothing gets dropped.
+- Every task adds at least one automated Vitest test covering the core logic it introduces (pure functions, API route handlers, content-shape defaults, migration/conversion logic) — **in addition to**, not instead of, the task's manual-verification step. This is a firm requirement per user decision on 2026-07-25 (this codebase had no automated test runner before Task 0 introduces one). Test files live next to the code they test, named `*.test.ts`, matching Vitest's default convention. UI-only rendering with no meaningful branching logic (e.g. a static `<hr>` for Divider) doesn't need a test of its own — test the logic, not the JSX.
+
+---
+
+## Stage 0: Test infrastructure
+
+### Task 0: Set up Vitest
+
+**Context for implementer:** This project has no automated test runner today — only `jiti` for running ad-hoc `.ts` scripts. Every task from here on requires a real automated test (per Global Constraints), so this task exists purely to make `npx vitest run` a working command before Task 1 needs it.
+
+**Files:**
+- Modify: `package.json`
+- Create: `vitest.config.ts`
+- Create: `src/lib/utils.test.ts`
+
+**Interfaces:**
+- Produces: `npm test` runs `vitest run` (single pass, CI-style, non-watch) for every later task to use.
+
+- [ ] **Step 1: Install Vitest**
+
+Run: `npm install -D vitest`
+
+- [ ] **Step 2: Add the test script to `package.json`**
+
+In `"scripts"`, add: `"test": "vitest run"`
+
+- [ ] **Step 3: Create `vitest.config.ts`**
+
+```typescript
+import { defineConfig } from "vitest/config";
+import path from "path";
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  test: {
+    environment: "node",
+  },
+});
+```
+
+(matches this project's existing `@/*` -> `src/*` path alias, already used everywhere via `tsconfig.json`'s `paths`)
+
+- [ ] **Step 4: Write a real first test against existing code, to prove the harness works**
+
+```typescript
+// src/lib/utils.test.ts
+import { describe, it, expect } from "vitest";
+import { safeJson, formatBytes } from "@/lib/utils";
+
+describe("safeJson", () => {
+  it("parses valid JSON", () => {
+    expect(safeJson('{"a":1}', {})).toEqual({ a: 1 });
+  });
+
+  it("falls back on invalid JSON", () => {
+    expect(safeJson("not json", { fallback: true })).toEqual({ fallback: true });
+  });
+
+  it("falls back on null/undefined input", () => {
+    expect(safeJson(null, [])).toEqual([]);
+    expect(safeJson(undefined, [])).toEqual([]);
+  });
+});
+
+describe("formatBytes", () => {
+  it("formats bytes under 1KB as B", () => {
+    expect(formatBytes(500)).toBe("500 B");
+  });
+
+  it("formats KB", () => {
+    expect(formatBytes(2048)).toBe("2.0 KB");
+  });
+
+  it("formats MB", () => {
+    expect(formatBytes(5 * 1024 * 1024)).toBe("5.0 MB");
+  });
+});
+```
+
+- [ ] **Step 5: Run the tests**
+
+Run: `npm test`
+Expected: `Test Files 1 passed (1)`, `Tests 6 passed (6)`, zero failures.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add package.json package-lock.json vitest.config.ts src/lib/utils.test.ts
+git commit -m "chore: add Vitest test runner"
+```
 
 ---
 
