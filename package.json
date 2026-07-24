@@ -48,6 +48,7 @@
     "@types/pdf-parse": "^1.1.4",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "jiti": "^2.7.0",
     "prisma": "^6.7.0",
     "tailwindcss": "^4.1.5",
     "tw-animate-css": "^1.2.9",
