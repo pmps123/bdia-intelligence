@@ -360,12 +360,14 @@ export default function ProjectPage() {
           header: "",
           footer: "",
           title: state.project.name,
-          // vendors commonly mark their own price-increase rows with "*"/"**" in the product
-          // code, and "Cek Manual" is the computed extreme-price-swing flag - both make a row red
-          highlightIfContains: ["*", "Cek Manual"],
+          // "Cek Manual" is the computed extreme-price-swing flag - makes a row red
+          highlightIfContains: ["Cek Manual"],
           // a genuine matched pair (both sides of the comparison actually present, not a
           // one-sided vendor-only or internal-only row) stands out red for quick visual scanning
           highlightIfBothPresent: ["Vendor Product", "Internal Product"],
+          // a vendor's own price-increase marker ("*"/"**"/"***") on their product name gets its
+          // own yellow highlight, separate from the red match highlight, for a quick price-change check
+          highlightYellowIfContains: { column: "Vendor Product", needles: ["*"] },
         },
       }),
     });

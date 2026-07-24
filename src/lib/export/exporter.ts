@@ -114,12 +114,21 @@ export async function exportExcel(input: ExportInput): Promise<Buffer> {
     const [aKey, bKey] = cfg.highlightIfBothPresent ?? [];
     const bothPresentHighlight = !!aKey && !!bKey && String(r[aKey] ?? "").trim() !== "" && String(r[bKey] ?? "").trim() !== "";
     const rowHighlight = containsHighlight || bothPresentHighlight;
+    // A vendor's own price-increase marker ("*"/"**"/"***" on the product name) is a different
+    // signal from the red "genuine match" highlight above - yellow lets it stand out on its own
+    // for a quick visual price-change check, so it only applies when red hasn't already claimed
+    // the row.
+    const yellowCfg = cfg.highlightYellowIfContains;
+    const yellowHighlight =
+      !rowHighlight && !!yellowCfg && yellowCfg.needles.some((needle) => String(r[yellowCfg.column] ?? "").includes(needle));
     columns.forEach((c, i) => {
       const v = r[c.key];
       const cell = row.getCell(i + 1);
       cell.value = numCols.has(c.key) && v !== "" && v !== null && v !== undefined ? Number(v) : ((v as ExcelJS.CellValue) ?? "");
       if (rowHighlight || cfg.highlightColumns?.includes(c.key)) {
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFECACA" } };
+      } else if (yellowHighlight) {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFDE68A" } };
       }
     });
     rowCursor++;

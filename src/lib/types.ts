@@ -241,10 +241,12 @@ export interface ExportConfig {
   header: string;
   footer: string;
   title: string;
-  /** Any row with one of these substrings in one of its cells (e.g. a vendor's own "*" price-increase marker, or a computed anomaly flag) gets a red background - unset by default. */
+  /** Any row with one of these substrings in one of its cells (e.g. a computed anomaly flag) gets a red background - unset by default. */
   highlightIfContains?: string[];
   /** Column keys whose cells always get a red background, regardless of content - unset by default. */
   highlightColumns?: string[];
   /** A row gets a red background when both of these column keys are non-empty (e.g. a genuine vendor<->internal match, not a one-sided row) - unset by default. */
   highlightIfBothPresent?: [string, string];
+  /** A row gets a yellow background (instead of red) when the given column contains one of these substrings (e.g. a vendor's own "*"/"**"/"***" price-increase marker) - unset by default. Red takes precedence when a row matches both. */
+  highlightYellowIfContains?: { column: string; needles: string[] };
 }
