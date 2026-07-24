@@ -164,6 +164,14 @@ export default function ProjectPage() {
   const [internalRoles, setInternalRoles] = React.useState<Roles>(EMPTY_ROLES);
   const [vendorRoles, setVendorRoles] = React.useState<Roles>(EMPTY_ROLES);
   const [jobId, setJobId] = React.useState<string | null>(null);
+  // "roles.product === null" used to gate re-applying a fresh auto-suggestion, but that's also
+  // true right after the FIRST auto-suggestion misfires (e.g. a re-parsed/re-uploaded file whose
+  // detection improved) as long as product itself did get set - the stale wrong suggestion then
+  // never gets replaced by a better one on a later load() without a full page reload. Track
+  // whether the *user* actually touched the dropdown instead, so auto-suggestions stay free to
+  // improve until a real manual choice exists to protect.
+  const internalRolesTouchedRef = React.useRef(false);
+  const vendorRolesTouchedRef = React.useRef(false);
 
   // review step
   const [results, setResults] = React.useState<ResultDto[]>([]);
@@ -182,12 +190,6 @@ export default function ProjectPage() {
   const [format, setFormat] = React.useState<"xlsx" | "csv" | "pdf">("xlsx");
   const [cols, setCols] = React.useState<{ key: string; title: string; include: boolean }[]>([]);
   const [exporting, setExporting] = React.useState(false);
-  // load() can (and normally does) fire before the internal file's sheet/header details exist yet
-  // (e.g. on the very first page visit, before any file is even uploaded) - this tracks whether
-  // code columns have actually been incorporated, so they can be retrofitted the moment real
-  // internal headers show up, instead of being silently skipped forever because `cols` already
-  // had *some* entries by then.
-  const codeColsAppliedRef = React.useRef(false);
 
   const load = React.useCallback(async () => {
     const res = await fetch(`/api/projects/${id}`);
@@ -199,16 +201,18 @@ export default function ProjectPage() {
     const d: ProjectState = await res.json();
     setState(d);
     // export column titles follow the selected internal price source, plus whatever code
-    // columns the (auto-suggested) internal sheet has
+    // columns the (auto-suggested) internal sheet has. load() can (and normally does) fire before
+    // the internal file's sheet/header details exist yet (e.g. on the very first page visit,
+    // before any file is even uploaded) - retrofitting missing code columns on every load, not
+    // just once, means they still show up once real internal headers arrive, whenever that is.
+    // Safe to re-run: `toAdd` is naturally empty once a column's already there.
     setCols((c) => {
       const bestName = d.internal?.suggestions[0]?.name;
       const internalHeaders = d.internal?.sheets.find((s) => s.name === bestName)?.headers;
       if (c.length === 0) {
-        codeColsAppliedRef.current = !!internalHeaders?.length;
         return exportColumns(priceSourceLabel(d.project.priceSource), internalHeaders).map((x) => ({ ...x, include: true }));
       }
-      if (codeColsAppliedRef.current || !internalHeaders?.length) return c;
-      codeColsAppliedRef.current = true;
+      if (!internalHeaders?.length) return c;
       const toAdd = codeColumnsFor(internalHeaders).filter((cc) => !c.some((x) => x.key === cc.key));
       if (toAdd.length === 0) return c;
       const insertAt = c.findIndex((x) => x.key === "Internal Product") + 1 || c.length;
@@ -218,12 +222,12 @@ export default function ProjectPage() {
     if (d.internal) {
       const best = d.internal.suggestions[0];
       setInternalSheet((s) => s || best?.name || "");
-      setInternalRoles((r) => (r.product === null ? rolesFromSuggestion(best) : r));
+      if (!internalRolesTouchedRef.current) setInternalRoles(rolesFromSuggestion(best));
     }
     if (d.vendor) {
       const best = d.vendor.suggestions[0];
       setVendorSheet((s) => s || best?.name || "");
-      setVendorRoles((r) => (r.product === null ? rolesFromSuggestion(best) : r));
+      if (!vendorRolesTouchedRef.current) setVendorRoles(rolesFromSuggestion(best));
     }
     return d;
   }, [id, router]);
@@ -459,8 +463,8 @@ export default function ProjectPage() {
             Worksheets and columns were detected automatically. Confirm or adjust the suggestions, then run matching.
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
-            <DetectCard title={`Internal file (${priceSourceLabel(state.project.priceSource)})`} info={state.internal} sheetName={internalSheet} onSheet={(s) => { setInternalSheet(s); setInternalRoles(rolesFromSuggestion(state.internal!.suggestions.find((x) => x.name === s))); }} roles={internalRoles} onRoles={setInternalRoles} showQtyRules={state.project.priceSource === "CUSTOM"} />
-            <DetectCard title="Vendor file" info={state.vendor} sheetName={vendorSheet} onSheet={(s) => { setVendorSheet(s); setVendorRoles(rolesFromSuggestion(state.vendor!.suggestions.find((x) => x.name === s))); }} roles={vendorRoles} onRoles={setVendorRoles} showQtyRules={false} />
+            <DetectCard title={`Internal file (${priceSourceLabel(state.project.priceSource)})`} info={state.internal} sheetName={internalSheet} onSheet={(s) => { setInternalSheet(s); setInternalRoles(rolesFromSuggestion(state.internal!.suggestions.find((x) => x.name === s))); }} roles={internalRoles} onRoles={(r) => { internalRolesTouchedRef.current = true; setInternalRoles(r); }} showQtyRules={state.project.priceSource === "CUSTOM"} />
+            <DetectCard title="Vendor file" info={state.vendor} sheetName={vendorSheet} onSheet={(s) => { setVendorSheet(s); setVendorRoles(rolesFromSuggestion(state.vendor!.suggestions.find((x) => x.name === s))); }} roles={vendorRoles} onRoles={(r) => { vendorRolesTouchedRef.current = true; setVendorRoles(r); }} showQtyRules={false} />
           </div>
           <JobProgress job={job} />
           <div className="flex justify-end">
