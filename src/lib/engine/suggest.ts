@@ -118,11 +118,19 @@ export function analyzeColumns(headers: string[], rows: string[][], otherProduct
       ratios.push(a / b);
     }
     if (ratios.length < Math.max(5, rows.length * 0.5)) return false; // not enough evidence either way
-    const mean = ratios.reduce((sum, x) => sum + x, 0) / ratios.length;
-    if (mean === 0) return false;
-    const variance = ratios.reduce((sum, x) => sum + (x - mean) * (x - mean), 0) / ratios.length;
-    const coeffOfVariation = Math.sqrt(variance) / Math.abs(mean);
-    return coeffOfVariation < 0.03;
+    // Median-based, not mean/stddev: a handful of garbled rows (a misread digit, a value that
+    // landed in the wrong column - inevitable in OCR-sourced data) can each throw one ratio wildly
+    // off, and a mean-based spread check treats those the same as the tight majority - confirmed
+    // directly on a real document, where ~80% of rows held one exact fixed ratio but a few garbled
+    // outliers alone pushed the coefficient of variation past the old threshold, hiding a genuinely
+    // price-derived column entirely. The median stays put regardless of how wild a minority of
+    // outliers gets; asking how many ratios actually sit close to it - not how tightly they all
+    // average together - answers the same question without being dominated by that minority.
+    const sorted = [...ratios].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    if (median === 0) return false;
+    const close = ratios.filter((r) => Math.abs(r - median) / median < 0.03).length;
+    return close / ratios.length >= 0.6;
   };
 
   const taken = new Set<number>();

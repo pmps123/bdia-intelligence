@@ -313,6 +313,13 @@ function detectRowBands(
   // table that's uniformly this dense throughout (the original reason for a small floor) keeps a
   // small median too, so its own lines stay ungrouped; only a spurious minority of anomalously
   // tight gaps against an otherwise-normal rhythm get merged away.
+  // ponytail: a global median under-merges a densely multi-boxed group whose OWN border-vs-text
+  // gap runs no wider than its real row-to-row gap (confirmed on a real document: one such group
+  // stayed split into half-height bands, scattering a product's code and prices across rows that
+  // never reunited downstream) - a local window was tried and rejected here (see git history),
+  // since within that same group both gap kinds are similarly tight and no gap-distance threshold,
+  // local or global, can tell them apart; would need a different signal (e.g. peak sharpness) to
+  // fix, not just a smaller floor.
   const lineGaps = linePeaks.slice(2).map((y, i) => y - linePeaks[i + 1]).sort((a, b) => a - b);
   const medianLineGap = lineGaps.length >= 3 ? lineGaps[Math.floor(lineGaps.length / 2)] : 0;
   const minLineGap = Math.max(5, medianLineGap * 0.6);
@@ -463,11 +470,37 @@ async function extractHeaderLabels(
   }
   if (words.length === 0) return null;
 
-  const cols: OcrWord[][] = Array.from({ length: boundaries.length + 1 }, () => []);
-  for (const w of words) {
+  const bucketOf = (w: OcrWord) => {
     const cx = (w.x0 + w.x1) / 2;
     const col = boundaries.findIndex((b) => cx < b);
-    cols[col === -1 ? boundaries.length : col].push(w);
+    return col === -1 ? boundaries.length : col;
+  };
+
+  // A masthead can be more than one physical line tall (e.g. a logo line plus a tagline line
+  // right below it) - dropping only the single line above already stripped only the first of
+  // those, so the second one's garbled OCR text still bled into column 0's label (confirmed
+  // directly on a real document: a tagline read as "ER ENE." and prefixed the real "BUILT-IN
+  // HOB" header). A genuine header line labels several columns at once; a masthead line's text
+  // sits within just one of them (usually the leftmost, under the logo). Keep peeling further
+  // leading lines off - by the SAME column buckets the final labels use, never by wording - as
+  // long as each one touches at most one column, always leaving at least the last physical line
+  // in the region (the real header can never be dropped entirely this way).
+  const scale = 6; // the crop was upscaled by this same fixed factor in both dimensions
+  let cutAt = cropTop;
+  for (let j = 1; j < lineBoundaries.length - 2; j++) {
+    const lineWords = words.filter((w) => {
+      const origY = cropTop + w.y0 / scale;
+      return origY >= lineBoundaries[j] && origY < lineBoundaries[j + 1];
+    });
+    if (lineWords.length > 0 && new Set(lineWords.map(bucketOf)).size > 1) break;
+    cutAt = lineBoundaries[j + 1];
+  }
+  const headerWords = cutAt > cropTop ? words.filter((w) => cropTop + w.y0 / scale >= cutAt) : words;
+  if (headerWords.length === 0) return null;
+
+  const cols: OcrWord[][] = Array.from({ length: boundaries.length + 1 }, () => []);
+  for (const w of headerWords) {
+    cols[bucketOf(w)].push(w);
   }
   const labels = cols.map((colWords) =>
     [...colWords].sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0).map((w) => w.text).join(" ")
@@ -547,28 +580,45 @@ async function ocrTableBlock(
   const { bands, headerRegion } = detectRowBands(px, width, height);
   if (process.env.DEBUG_ROWS) console.error(`block ${width}x${height}, ${bands.length} bands:`, bands.map((b) => `${b.top}-${b.bottom}`).join(", "));
 
+  const STANDARD_SCALE = 6;
+  const RETRY_SCALE = 4;
+  const cropAt = (band: { top: number; bottom: number }, scale: number) =>
+    sharp(px, { raw: { width, height, channels: 1 } })
+      .extract({ left: 0, top: band.top, width, height: band.bottom - band.top })
+      // small table text (~8-9pt at typical scan resolution) reads far more reliably upscaled first
+      .resize({ width: width * scale })
+      .png()
+      .toBuffer();
+
+  const standardPass: OcrWord[][] = [];
+  for (const band of bands) standardPass.push(await recognizeRowWords(worker, await cropAt(band, STANDARD_SCALE)));
+
+  // A genuine product row's field count matches most other rows in this same block - a code plus
+  // however many price columns this vendor prints - not a fixed guess, since that count varies
+  // vendor to vendor. The modal row width across the whole block catches a row that lost just ONE
+  // of several fields, which a fixed "fewer than 2" floor never could: confirmed directly on a
+  // real document, several rows here kept a code and exactly one of two price columns - 2 words,
+  // never below the old floor - and silently kept the other price blank forever.
+  const widthCounts = new Map<number, number>();
+  for (const r of standardPass) if (r.length > 0) widthCounts.set(r.length, (widthCounts.get(r.length) ?? 0) + 1);
+  let modalWidth = 0;
+  let modalCount = 0;
+  for (const [w, c] of widthCounts) if (c > modalCount || (c === modalCount && w > modalWidth)) { modalWidth = w; modalCount = c; }
+  const retryFloor = Math.max(2, modalWidth);
+
   const rows: OcrWord[][] = [];
-  for (const band of bands) {
-    const cropAt = (scale: number) =>
-      sharp(px, { raw: { width, height, channels: 1 } })
-        .extract({ left: 0, top: band.top, width, height: band.bottom - band.top })
-        // small table text (~8-9pt at typical scan resolution) reads far more reliably upscaled first
-        .resize({ width: width * scale })
-        .png()
-        .toBuffer();
-    const STANDARD_SCALE = 6;
-    const RETRY_SCALE = 4;
-    const standardWords = await recognizeRowWords(worker, await cropAt(STANDARD_SCALE));
+  for (let i = 0; i < bands.length; i++) {
+    const band = bands[i];
+    const standardWords = standardPass[i];
     let words = standardWords;
-    // a real product row is a code plus at least one price - fewer than 2 surviving words means
-    // this pass likely lost something. Retrying the identical crop gets the identical result -
-    // confirmed directly, Tesseract's recognition is deterministic for identical input within a
-    // process, even across separate worker instances - but a *different* upscale factor is a
-    // genuinely different input, and confidence on borderline text swings meaningfully with it
-    // (confirmed directly: the same row's price scored 3%, 96%, and 0% confidence at 6x, 4x and
-    // 8x respectively), so it's worth an independent second attempt rather than a repeat.
-    if (words.length < 2) {
-      const retryWords = await recognizeRowWords(worker, await cropAt(RETRY_SCALE));
+    // Retrying the identical crop gets the identical result - confirmed directly, Tesseract's
+    // recognition is deterministic for identical input within a process, even across separate
+    // worker instances - but a *different* upscale factor is a genuinely different input, and
+    // confidence on borderline text swings meaningfully with it (confirmed directly: the same
+    // row's price scored 3%, 96%, and 0% confidence at 6x, 4x and 8x respectively), so it's worth
+    // an independent second attempt rather than a repeat.
+    if (words.length < retryFloor) {
+      const retryWords = await recognizeRowWords(worker, await cropAt(band, RETRY_SCALE));
       if (retryWords.length > words.length) {
         // detectColumnBoundaries/wordsToRow compare x-positions across every row in the block, so
         // a retry recognized at a different scale must have its coordinates normalized back to the
@@ -915,8 +965,16 @@ export function parseNumeric(value: string | null | undefined): number | null {
   const lastComma = s.lastIndexOf(",");
   const lastDot = s.lastIndexOf(".");
   if (lastComma > -1 && lastDot > -1) {
-    // whichever separator comes last is the decimal separator
-    if (lastComma > lastDot) s = s.replace(/\./g, "").replace(",", ".");
+    // whichever separator comes last is usually the decimal separator - except when the group
+    // after it is exactly 3 digits, which a real decimal fraction in this domain never is (prices
+    // don't carry thousandths) and a genuine thousands group always is. OCR occasionally misreads
+    // just the LAST "." of an all-thousands number as "," (confirmed directly on a real document:
+    // "3.139.000" read as "3.139,000") - the plain "last wins" rule then reads it as a fraction
+    // three orders of magnitude too small instead of the thousands group it actually is.
+    const lastSep = Math.max(lastComma, lastDot);
+    const trailingDigits = s.length - lastSep - 1;
+    if (trailingDigits === 3) s = s.replace(/[.,]/g, "");
+    else if (lastComma > lastDot) s = s.replace(/\./g, "").replace(",", ".");
     else s = s.replace(/,/g, "");
   } else if (lastComma > -1) {
     const decimals = s.length - lastComma - 1;
