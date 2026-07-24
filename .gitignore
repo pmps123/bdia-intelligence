@@ -20,3 +20,6 @@ pipamas-*.json
 
 .vercel
 .env*
+
+.worktrees/
+generated/
