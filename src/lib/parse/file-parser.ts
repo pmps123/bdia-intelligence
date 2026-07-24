@@ -74,7 +74,12 @@ function detectSafeOcrHeader(matrix: string[][]): { headerRowIndex: number; head
   return null;
 }
 
-function sheetFromMatrix(name: string, index: number, matrix: string[][], opts?: { useSafeOcrHeader?: boolean }): ParsedSheet {
+function sheetFromMatrix(
+  name: string,
+  index: number,
+  matrix: string[][],
+  opts?: { useSafeOcrHeader?: boolean; explicitHeaders?: string[] }
+): ParsedSheet {
   // drop fully empty rows and trailing empty columns
   const cleaned = matrix.filter((r) => r.some((c) => c !== ""));
   const width = cleaned.reduce((m, r) => Math.max(m, r.length), 0);
@@ -85,6 +90,13 @@ function sheetFromMatrix(name: string, index: number, matrix: string[][], opts?:
   });
   if (normalized.length === 0) {
     return { name, index, rowCount: 0, columnCount: 0, headers: [], headerRowIndex: 0, rows: [] };
+  }
+  // Real header text recovered from the PDF's own header region (see extractHeaderLabels) beats
+  // any heuristic guess - these rows never need stripping since they came from a separate crop,
+  // not from a row within this matrix.
+  if (opts?.explicitHeaders && opts.explicitHeaders.some((h) => h !== "")) {
+    const headers = Array.from({ length: width }, (_, i) => opts.explicitHeaders![i] || `Column ${i + 1}`);
+    return { name, index, rowCount: normalized.length, columnCount: width, headers, headerRowIndex: -1, rows: normalized };
   }
   if (opts?.useSafeOcrHeader) {
     const safe = detectSafeOcrHeader(normalized);
@@ -259,7 +271,11 @@ function wordsToRow(words: OcrWord[], boundaries: number[]): string[] {
  * peak relative to the (near-blank) space right around them; nothing here assumes ruled lines
  * exist at all.
  */
-function detectRowBands(px: Buffer, width: number, height: number): { top: number; bottom: number }[] {
+function detectRowBands(
+  px: Buffer,
+  width: number,
+  height: number
+): { bands: { top: number; bottom: number }[]; headerRegion: { top: number; bottom: number } | null } {
   const darkFracRow = (y: number) => {
     let c = 0;
     const off = y * width;
@@ -271,8 +287,27 @@ function detectRowBands(px: Buffer, width: number, height: number): { top: numbe
   for (let y = 1; y < height - 1; y++) {
     if (rowFrac[y] > 0.25 && rowFrac[y] >= rowFrac[y - 1] && rowFrac[y] >= rowFrac[y + 1]) peaks.push(y);
   }
+  // Pass 1: collapse local maxima that belong to the same stroke/character (a few px apart) into
+  // one boundary per visual text line, using the original small fixed floor.
+  const linePeaks: number[] = [0];
+  for (const y of peaks) if (y - linePeaks[linePeaks.length - 1] > 5) linePeaks.push(y);
+
+  // Pass 2: a ruled cell border sits as its own strong ink peak just a few px from the adjacent
+  // text row's own line-peak (confirmed on the first real document tested against this, in a
+  // grid-bordered table region), and pass 1's fixed floor alone counted it as an extra row boundary
+  // there - one printed row was split into several near-empty bands, and the resulting noise words
+  // went on to corrupt column-boundary detection for the whole block downstream. The minimum gap
+  // that counts as a genuinely new row scales off the median line-to-line gap actually observed in
+  // THIS image (computed from pass 1's output, not the raw same-character noise pass 1 already
+  // absorbed) instead of a fixed pixel count, so it adapts to any font size or scan resolution - a
+  // table that's uniformly this dense throughout (the original reason for a small floor) keeps a
+  // small median too, so its own lines stay ungrouped; only a spurious minority of anomalously
+  // tight gaps against an otherwise-normal rhythm get merged away.
+  const lineGaps = linePeaks.slice(2).map((y, i) => y - linePeaks[i + 1]).sort((a, b) => a - b);
+  const medianLineGap = lineGaps.length >= 3 ? lineGaps[Math.floor(lineGaps.length / 2)] : 0;
+  const minLineGap = Math.max(5, medianLineGap * 0.6);
   const boundaries: number[] = [0];
-  for (const y of peaks) if (y - boundaries[boundaries.length - 1] > 5) boundaries.push(y);
+  for (const y of linePeaks.slice(1)) if (y - boundaries[boundaries.length - 1] > minLineGap) boundaries.push(y);
   boundaries.push(height);
 
   const rawBands: { top: number; bottom: number }[] = [];
@@ -290,8 +325,22 @@ function detectRowBands(px: Buffer, width: number, height: number): { top: numbe
   // that tall, and not simply blank margin, almost certainly hides that many un-detected rows.
   const heights = rawBands.map((b) => b.bottom - b.top).sort((a, b) => a - b);
   const typical = heights[Math.floor(heights.length * 0.4)] ?? 0;
+
+  // The very first band, when it's this same oversized mixed-content case, is exactly the
+  // logo/title/column-header region above the table - genuinely worth reading as one multi-line
+  // block (see extractHeaderLabels) instead of only mining a stray first data row out of it.
+  const first = rawBands[0];
+  const headerRegion =
+    first && first.top <= 3 && typical > 0 && first.bottom - first.top > typical * 1.8
+      ? { top: first.top, bottom: first.bottom }
+      : null;
+
   const bands: { top: number; bottom: number }[] = [];
   for (const b of rawBands) {
+    // The header region is OCR'd separately as one cohesive block (see extractHeaderLabels) -
+    // slicing it into row-bands here too used to feed mangled logo/title fragments into the data
+    // rows as phantom leading entries (confirmed on the first real document tested against this).
+    if (headerRegion && b.top === headerRegion.top && b.bottom === headerRegion.bottom) continue;
     const h = b.bottom - b.top;
     const avgInk = rowFrac.slice(b.top, b.bottom).reduce((a, v) => a + v, 0) / Math.max(1, h);
     if (typical > 0 && h > typical * 1.8 && avgInk > 0.02) {
@@ -312,12 +361,23 @@ function detectRowBands(px: Buffer, width: number, height: number): { top: numbe
       for (const y of subPeaks) if (y - subBoundaries[subBoundaries.length - 1] > 5) subBoundaries.push(y);
       subBoundaries.push(b.bottom);
 
+      const subBands: { top: number; bottom: number }[] = [];
       if (subBoundaries.length > 2) {
         for (let i = 0; i < subBoundaries.length - 1; i++) {
           const top = Math.max(b.top, subBoundaries[i] - 2);
           const bottom = Math.min(b.bottom, subBoundaries[i + 1] + 2);
-          if (bottom - top >= 6) bands.push({ top, bottom });
+          if (bottom - top >= 6) subBands.push({ top, bottom });
         }
+      }
+      // A resplit that produces pieces far smaller than a real row is the same border-artifact
+      // noise the row-rhythm-adaptive gap above already rejected once (a ruled cell border sitting
+      // right next to the real text line's own peak, not a genuinely separate row - confirmed on
+      // the first real document tested against this, a grid-bordered region whose extra border
+      // peaks came back at this more sensitive threshold even after being merged away up above).
+      // Equal division, which can only produce plausibly row-sized pieces by construction, is the
+      // safer fallback than trusting a resplit that doesn't.
+      if (subBands.length > 1 && subBands.every((sb) => sb.bottom - sb.top >= typical * 0.5)) {
+        bands.push(...subBands);
       } else {
         const n = Math.max(1, Math.round(h / typical));
         const step = h / n;
@@ -327,7 +387,81 @@ function detectRowBands(px: Buffer, width: number, height: number): { top: numbe
       bands.push(b);
     }
   }
-  return bands;
+  return { bands, headerRegion };
+}
+
+/**
+ * Read the header region - logo, title and column labels, all mixed together - as one cohesive
+ * multi-line block instead of the disconnected ~20px strips the row-band pass uses for data.
+ * PSM.SINGLE_BLOCK is built for exactly this (short multi-line text), unlike PSM.SINGLE_LINE.
+ * Recognized words are bucketed into the SAME column boundaries the data rows use, then joined in
+ * reading order (top-to-bottom within a column) so a header that wraps onto two printed lines -
+ * e.g. "Netto" / "Zona 1" - reconstructs as one label per column. Nothing here depends on any
+ * specific header wording, so it works for any vendor's PDF with a header-above-data layout.
+ */
+async function extractHeaderLabels(
+  worker: Awaited<ReturnType<typeof import("tesseract.js").createWorker>>,
+  px: Buffer,
+  width: number,
+  height: number,
+  headerRegion: { top: number; bottom: number },
+  boundaries: number[]
+): Promise<string[] | null> {
+  const sharp = (await import("sharp")).default;
+  const { PSM } = await import("tesseract.js");
+
+  // The header region can bundle real column labels together with page furniture sitting above
+  // them - a vendor's logo, a tagline, an "effective as of" date, never the same text twice.
+  // Split the region into its own physical print lines (same sub-peak technique as the oversized-
+  // band case above, just more sensitive since this crop is small and homogeneous) and drop the
+  // topmost line: a genuine multi-line header (e.g. "Price List" / "(excl PPN)") sits directly
+  // above the data rows, while masthead content sits a further, real gap above THAT. Nothing here
+  // reads or assumes what that first line says, so it holds for any vendor's layout.
+  const darkFracRow = (y: number) => {
+    let c = 0;
+    const off = y * width;
+    for (let x = 0; x < width; x++) if (px[off + x] < 190) c++;
+    return c / width;
+  };
+  const rowFrac = Array.from({ length: headerRegion.bottom - headerRegion.top }, (_, i) => darkFracRow(headerRegion.top + i));
+  const peaks: number[] = [];
+  for (let i = 1; i < rowFrac.length - 1; i++) {
+    if (rowFrac[i] > 0.12 && rowFrac[i] >= rowFrac[i - 1] && rowFrac[i] >= rowFrac[i + 1]) peaks.push(headerRegion.top + i);
+  }
+  const lineBoundaries: number[] = [headerRegion.top];
+  for (const y of peaks) if (y - lineBoundaries[lineBoundaries.length - 1] > 5) lineBoundaries.push(y);
+  lineBoundaries.push(headerRegion.bottom);
+  // +6px past the boundary itself: it sits ON the discarded line's ink-density peak (which, right
+  // at a ruled table border, IS the border rule), so cropping exactly there slices through it and
+  // OCR reads the cut border as stray garbled characters - confirmed directly.
+  const cropTop = lineBoundaries.length > 2 ? Math.min(headerRegion.bottom - 6, lineBoundaries[1] + 6) : headerRegion.top;
+
+  const cropped = await sharp(px, { raw: { width, height, channels: 1 } })
+    .extract({ left: 0, top: cropTop, width, height: headerRegion.bottom - cropTop })
+    .resize({ width: width * 6 })
+    .png()
+    .toBuffer();
+
+  await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
+  let words: OcrWord[];
+  try {
+    words = await recognizeRowWords(worker, cropped);
+  } finally {
+    // every other caller of this worker expects row-band mode; restore it before returning.
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE });
+  }
+  if (words.length === 0) return null;
+
+  const cols: OcrWord[][] = Array.from({ length: boundaries.length + 1 }, () => []);
+  for (const w of words) {
+    const cx = (w.x0 + w.x1) / 2;
+    const col = boundaries.findIndex((b) => cx < b);
+    cols[col === -1 ? boundaries.length : col].push(w);
+  }
+  const labels = cols.map((colWords) =>
+    [...colWords].sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0).map((w) => w.text).join(" ")
+  );
+  return labels.some((l) => l !== "") ? labels : null;
 }
 
 /** Recognize one already-isolated row-band crop, returning its words filtered the same way every recognition pass is: confidence >= 40, not pure punctuation. */
@@ -363,11 +497,11 @@ async function recognizeRowWords(worker: Awaited<ReturnType<typeof import("tesse
 async function ocrTableBlock(
   worker: Awaited<ReturnType<typeof import("tesseract.js").createWorker>>,
   image: Buffer
-): Promise<string[][]> {
+): Promise<{ rows: string[][]; headerLabels: string[] | null }> {
   const sharp = (await import("sharp")).default;
   const { data: px, info } = await sharp(image).greyscale().raw().toBuffer({ resolveWithObject: true });
   const { width, height } = info;
-  const bands = detectRowBands(px, width, height);
+  const { bands, headerRegion } = detectRowBands(px, width, height);
   if (process.env.DEBUG_ROWS) console.error(`block ${width}x${height}, ${bands.length} bands:`, bands.map((b) => `${b.top}-${b.bottom}`).join(", "));
 
   const rows: OcrWord[][] = [];
@@ -406,7 +540,10 @@ async function ocrTableBlock(
     if (words.length > 0) rows.push(words);
   }
   const boundaries = detectColumnBoundaries(rows);
-  return rows.map((row) => wordsToRow(row, boundaries)).filter((row) => row.some((c) => c !== ""));
+  if (process.env.DEBUG_ROWS) console.error(`block ${width}x${height} boundaries: ${boundaries.map((b) => b.toFixed(0)).join(", ")}`);
+  const dataRows = rows.map((row) => wordsToRow(row, boundaries)).filter((row) => row.some((c) => c !== ""));
+  const headerLabels = headerRegion ? await extractHeaderLabels(worker, px, width, height, headerRegion, boundaries) : null;
+  return { rows: dataRows, headerLabels };
 }
 
 interface ColumnProfile {
@@ -462,10 +599,12 @@ function alignBlocksToCommonColumns(blocks: string[][][]): string[][] {
   const canonicalWidth = first.reduce((m, r) => Math.max(m, r.length), 0);
   const canonicalProfiles = Array.from({ length: canonicalWidth }, (_, c) => profileColumn(first, c));
 
+  if (process.env.DEBUG_ROWS) console.error(`align: canonical width=${canonicalWidth} profiles=${JSON.stringify(canonicalProfiles)}`);
   const merged: string[][] = [...first];
   for (const block of rest) {
     const width = block.reduce((m, r) => Math.max(m, r.length), 0);
     const profiles = Array.from({ length: width }, (_, c) => profileColumn(block, c));
+    if (process.env.DEBUG_ROWS) console.error(`align: block width=${width} profiles=${JSON.stringify(profiles)}`);
     const usedCanonical = new Set<number>();
     // ponytail: fixed similarity floors (0.45 same-position, 0.55 any-position) for "this is the
     // same column" - revisit if a vendor's block layout regularly needs a looser/stricter match.
@@ -487,6 +626,7 @@ function alignBlocksToCommonColumns(blocks: string[][][]): string[][] {
       if (best !== -1) usedCanonical.add(best);
       return best;
     });
+    if (process.env.DEBUG_ROWS) console.error(`align: mapping=${JSON.stringify(mapping)}`);
     // A column that doesn't confidently match anything in the canonical layout is dropped, not
     // appended as a new trailing column: on the first real document tested against this, one
     // malformed OCR row (a two-SKU cell that wrapped across two printed lines) produced exactly
@@ -507,7 +647,9 @@ function alignBlocksToCommonColumns(blocks: string[][][]): string[][] {
 }
 
 /** OCR fallback for scanned/signed PDFs that have no text layer at all. */
-async function ocrPdfTable(buffer: Buffer): Promise<string[][]> {
+async function ocrPdfTable(
+  buffer: Buffer
+): Promise<{ matrix: string[][]; headerLabels: string[] | null; categoryHints: (string | null)[] }> {
   const images = await extractPageImages(buffer);
   if (images.length === 0) {
     throw new Error(
@@ -522,12 +664,34 @@ async function ocrPdfTable(buffer: Buffer): Promise<string[][]> {
     // densely-packed table) line-layout analysis entirely instead of fighting it.
     await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE });
     const blocks: string[][][] = [];
+    // alignBlocksToCommonColumns maps every later block onto the FIRST block's column layout, so
+    // only the first block's header labels line up with the merged table's final column indices.
+    let headerLabels: string[] | null = null;
+    let firstBlockSeen = false;
+    // A page with several side-by-side blocks (see alignBlocksToCommonColumns) is often really one
+    // table split for space, but each block can still be its own product category ("BUILT-IN HOB"
+    // vs "COOKER HOOD") - and that name only ever appears reliably in the block's OWN header region
+    // (whole-block OCR, see extractHeaderLabels), never as a legible standalone row further down
+    // the merged data. Remember it per block so parsePdf can seed the right category at each
+    // block's boundary instead of trying to re-read the same text a second, less reliable way.
+    const blockCategoryHints: (string | null)[] = [];
     for (const image of images) {
       for (const block of await splitAtColumnGutter(image)) {
-        blocks.push(await ocrTableBlock(worker, block));
+        if (process.env.DEBUG_ROWS) console.error(`=== ocrTableBlock #${blocks.length} ===`);
+        const result = await ocrTableBlock(worker, block);
+        if (process.env.DEBUG_ROWS) console.error(`block #${blocks.length} rows:`, JSON.stringify(result.rows));
+        blocks.push(result.rows);
+        blockCategoryHints.push(result.headerLabels?.[0]?.trim() || null);
+        if (!firstBlockSeen) {
+          firstBlockSeen = true;
+          headerLabels = result.headerLabels;
+        }
       }
     }
-    return alignBlocksToCommonColumns(blocks);
+    // alignBlocksToCommonColumns pushes every row of every non-empty block, in order, with none
+    // dropped - so each block's row count alone is enough to map merged rows back to their block.
+    const categoryHints = blocks.flatMap((b, i) => b.map(() => blockCategoryHints[i]));
+    return { matrix: alignBlocksToCommonColumns(blocks), headerLabels, categoryHints };
   } finally {
     await worker.terminate();
   }
@@ -546,9 +710,14 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   const { text } = await pdfParse(buffer);
 
   let matrix: string[][];
+  let ocrHeaderLabels: string[] | null = null;
+  let ocrCategoryHints: (string | null)[] | null = null;
   const isOcr = text.trim() === "";
   if (isOcr) {
-    matrix = await ocrPdfTable(buffer);
+    const result = await ocrPdfTable(buffer);
+    matrix = result.matrix;
+    ocrHeaderLabels = result.headerLabels;
+    ocrCategoryHints = result.categoryHints;
   } else {
     const lines = text
       .split(/\r?\n/)
@@ -563,13 +732,39 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
     );
   }
   const width = matrix.reduce((m, r) => Math.max(m, r.length), 0);
+
+  // A category break - a section title ("COOKER HOOD", "ELECTRIC WATER HEATER") sitting between
+  // two blocks of what the tabular filter below flattens into one continuous table (see
+  // alignBlocksToCommonColumns, built for exactly this "one table split across the page for
+  // space" case) - has two possible sources. The reliable one is each OCR block's own header
+  // region (ocrCategoryHints, whole-block OCR - see extractHeaderLabels): it resets the category
+  // right at a block boundary even though the text that names it never appears anywhere in the
+  // block's own data rows. Within a block, a further sub-category still only shows up as a lone
+  // populated, non-numeric data row (e.g. "BUILT IN OVEN" partway down the Built-in Hob block) -
+  // required to be a real word or two (length >= 5), not the odd short OCR fragment ("Sr", "DU")
+  // that a signature or a misread border line leaves behind, which used to be mistaken for a new
+  // category and fragmented one section into several bogus ones. Nothing here reads what a label
+  // actually says beyond that length check, so it holds for any vendor's section layout.
+  let currentCategory = "";
+  let lastHint: string | null = null;
+  const categoryByRow = matrix.map((r, i) => {
+    const hint = ocrCategoryHints?.[i] ?? null;
+    if (hint && hint !== lastHint) currentCategory = hint;
+    lastHint = hint;
+    const nonEmpty = r.filter((c) => c !== "");
+    if (nonEmpty.length === 1 && nonEmpty[0].length >= 5 && parseNumeric(nonEmpty[0]) === null) currentCategory = nonEmpty[0];
+    return currentCategory;
+  });
+
   // keep only rows that look tabular (at least half of the max width actually populated) — the
   // rest is page furniture (titles, section headers, footnotes). Counts populated cells, not
   // array length: the OCR path always returns full-width rows padded with empty strings, so a
   // one-word title row has the same length as a real product row and must be judged by content.
   const populated = (r: string[]) => r.filter((c) => c !== "").length;
-  const tabular = matrix.filter((r) => populated(r) >= Math.max(2, Math.floor(width / 2)));
-  const source = tabular.length >= 3 ? tabular : matrix;
+  const tabularMask = matrix.map((r) => populated(r) >= Math.max(2, Math.floor(width / 2)));
+  const useTabular = tabularMask.filter(Boolean).length >= 3;
+  const source = useTabular ? matrix.filter((_, i) => tabularMask[i]) : matrix;
+  const sourceCategories = useTabular ? categoryByRow.filter((_, i) => tabularMask[i]) : categoryByRow;
 
   // Drop columns populated in only a sliver of rows: real columns in a price list are populated
   // throughout, so a column filled in a handful of rows out of dozens is virtually always OCR/
@@ -582,6 +777,17 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
     (c) => source.filter((r) => (r[c] ?? "") !== "").length / source.length >= 0.1
   );
   const pruned = keepCols.length > 0 ? source.map((r) => keepCols.map((c) => r[c] ?? "")) : source;
+  // ocrHeaderLabels was built in the same column space as the un-pruned matrix (one label per
+  // detectColumnBoundaries bucket), so it must be pruned the same way to stay index-synced.
+  const prunedHeaderLabels =
+    ocrHeaderLabels && keepCols.length > 0 ? keepCols.map((c) => ocrHeaderLabels![c] ?? "") : ocrHeaderLabels;
+
+  // Only worth a column when the document actually had section breaks - most vendor PDFs are one
+  // flat list and would otherwise get a column of empty strings.
+  const hasCategories = sourceCategories.some((c) => c !== "");
+  const withCategory = hasCategories ? pruned.map((r, i) => [...r, sourceCategories[i]]) : pruned;
+  const headerLabelsWithCategory =
+    hasCategories && prunedHeaderLabels ? [...prunedHeaderLabels, "Category"] : prunedHeaderLabels;
 
   // Header auto-detection (detectHeader) assumes a header row is textually distinguishable from
   // data rows - true for real spreadsheets, but not for this OCR-reconstructed matrix, where every
@@ -590,8 +796,15 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   // against this, detectHeader picked an ordinary product row as "the header" and every row above
   // it - several genuine products - silently vanished (rows before headerRowIndex are discarded).
   // Skipping header detection for OCR output only avoids that; a real text-layer PDF table keeps
-  // normal header detection, since its structure is exact, not reconstructed.
-  return { fileType: "pdf", sheets: [sheetFromMatrix("PDF Content", 0, pruned, { useSafeOcrHeader: isOcr })] };
+  // normal header detection, since its structure is exact, not reconstructed. When the header
+  // region itself was OCR'd successfully (extractHeaderLabels), those real labels are used
+  // directly instead of falling back to generic "Column N" placeholders.
+  return {
+    fileType: "pdf",
+    sheets: [
+      sheetFromMatrix("PDF Content", 0, withCategory, { useSafeOcrHeader: isOcr, explicitHeaders: headerLabelsWithCategory ?? undefined }),
+    ],
+  };
 }
 
 export async function parseUploadedFile(buffer: Buffer, fileName: string): Promise<ParsedFile> {

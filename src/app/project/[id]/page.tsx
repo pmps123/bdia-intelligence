@@ -490,8 +490,8 @@ export default function ProjectPage() {
               <Card key={r.id} className={cn(skipped.has(r.id) && "opacity-50")}>
                 <CardContent className="flex flex-wrap items-center gap-3 p-4">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium">{r.vendorLabel}</div>
-                    <div className="truncate text-sm text-muted-foreground">
+                    <div className="wrap-break-word font-medium" title={r.vendorLabel}>{r.vendorLabel}</div>
+                    <div className="wrap-break-word text-sm text-muted-foreground">
                       {r.status === "MANUAL" ? (
                         <span className="text-status-good">→ {r.internalLabel} (manual)</span>
                       ) : r.internalLabel || r.candidates[0]?.label ? (
@@ -580,7 +580,7 @@ export default function ProjectPage() {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Find the right product</DialogTitle>
-            <DialogDescription className="truncate">{replaceFor?.vendorLabel}</DialogDescription>
+            <DialogDescription className="truncate" title={replaceFor?.vendorLabel}>{replaceFor?.vendorLabel}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="relative">
@@ -591,7 +591,7 @@ export default function ProjectPage() {
               <div className="space-y-1">
                 {replaceFor.candidates.map((c) => (
                   <button key={c.rowId} className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm hover:bg-accent cursor-pointer" onClick={() => decide(replaceFor, "replace", c.rowId)}>
-                    <span className="truncate">{c.label}</span>
+                    <span className="truncate" title={c.label}>{c.label}</span>
                     <Badge variant="info">{(c.score * 100).toFixed(0)}%</Badge>
                   </button>
                 ))}
@@ -600,7 +600,7 @@ export default function ProjectPage() {
             <div className="max-h-60 space-y-1 overflow-y-auto thin-scroll">
               {searchRows.map((r) => (
                 <button key={r.id} className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm hover:bg-accent cursor-pointer" onClick={() => replaceFor && decide(replaceFor, "replace", r.id)}>
-                  <span className="truncate">{r.label}</span>
+                  <span className="truncate" title={r.label}>{r.label}</span>
                   {r.code && <span className="text-xs text-muted-foreground">{r.code}</span>}
                 </button>
               ))}
@@ -898,8 +898,8 @@ function PriceStep({ items, stats, filter, setFilter, refresh, validating, onNex
             )}
             {shown.map((it) => (
               <tr key={it.id} className={cn("border-t", anomaly.byId.get(it.id)?.severity === "high" && "bg-status-bad/5")}>
-                <td className="max-w-56 truncate px-3 py-2">{it.vendorLabel}</td>
-                <td className="max-w-56 truncate px-3 py-2">{it.internalLabel}</td>
+                <td className="max-w-56 truncate px-3 py-2" title={it.vendorLabel}>{it.vendorLabel}</td>
+                <td className="max-w-56 truncate px-3 py-2" title={it.internalLabel}>{it.internalLabel}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatNumber(it.vendorPrice)}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{formatNumber(it.internalPrice)}</td>
                 {/* Updated Price always takes the vendor price */}
