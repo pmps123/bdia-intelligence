@@ -251,13 +251,23 @@ function wordsToRow(words: OcrWord[], boundaries: number[]): string[] {
   }
   return cols.map((fragments) => {
     // A price that OCR split into two word fragments (a stray gap detected mid-number) must not
-    // be joined with a space: parseNumeric strips whitespace before parsing, so "2.057 490" turns
-    // into "2.057490" and the trailing group is read as decimal digits instead of another
-    // thousands-group - a 1,000x error, confirmed against the first real document tested against
-    // this. Every fragment being digits-and-separators-only means this is one broken-up number,
-    // not several cells - concatenate their bare digits directly instead of guessing a separator.
+    // be joined with a space: parseNumeric strips whitespace (and most punctuation) the exact same
+    // way it strips a real thousands separator, so "2.057 490" and "2.057490" parse identically -
+    // the trailing group reads as decimal digits instead of another thousands-group, a 1,000x
+    // error, confirmed against the first real document tested against this. Only that exact shape
+    // gets concatenated: exactly two fragments, the second a bare 3-digit thousands-group
+    // continuation. Three or more numeric fragments in one cell, or a second fragment that isn't a
+    // plain 3-digit group, mean unrelated values landed in the same column instead (confirmed on a
+    // real document: two different rows' figures merged into "28100002131367") - and because
+    // parseNumeric strips whitespace too, space-joining them doesn't actually help: it silently
+    // re-merges into that exact same wrong giant number downstream. Empty is the only genuinely
+    // safe output here - a missing value shows as "Missing" in the audit, not a confidently wrong
+    // one many orders of magnitude off.
     if (fragments.length > 1 && fragments.every((f) => /^[\d.,]+$/.test(f))) {
-      return fragments.map((f) => f.replace(/[.,]/g, "")).join("");
+      if (fragments.length === 2 && /^\d{3}$/.test(fragments[1])) {
+        return fragments.map((f) => f.replace(/[.,]/g, "")).join("");
+      }
+      return "";
     }
     return fragments.join(" ");
   });
@@ -479,23 +489,34 @@ async function recognizeRowWords(worker: Awaited<ReturnType<typeof import("tesse
           if (process.env.DEBUG_WORDS) console.error(`    raw word ${JSON.stringify(text)} conf=${w.confidence.toFixed(1)}`);
           if (text === "" || w.confidence < 40) continue; // low confidence: border-line/signature noise, not real text
           if (/^[^\p{L}\p{N}]+$/u.test(text)) {
+            const prev = words[words.length - 1];
             // A lone closing bracket that Tesseract split off as its own word (common right after
             // a product code's variant suffix, e.g. "RB-311N(GB" + ")" - confirmed on the first
             // real document tested against this, where nearly every parenthesized code lost its
             // close paren) reads as pure punctuation and was being dropped outright as border
             // noise. Reattach it to the immediately preceding word on this line when that word
-            // still has an unmatched opener, instead of losing real content; anything else pure
-            // punctuation (an actual misread ruled border) is still dropped, same as before.
+            // still has an unmatched opener, instead of losing real content.
             const opener = BRACKET_OPENERS[text];
-            const prev = words[words.length - 1];
             if (opener && prev) {
               const opens = prev.text.split(opener).length - 1;
               const closes = prev.text.split(text).length - 1;
               if (opens > closes) {
                 prev.text += text;
                 prev.x1 = w.bbox.x1;
+                continue;
               }
             }
+            // A vendor's own footnote marker ("*)", "**)", meaning "price increased") sits right
+            // after the product code as its own OCR word and was being dropped the same way. Keep
+            // it, space-separated (it's a genuinely separate visual token in the source, unlike a
+            // split bracket) - a downstream highlight rule depends on "*" surviving into the
+            // exported product name.
+            if (text.includes("*") && prev) {
+              prev.text += " " + text;
+              prev.x1 = w.bbox.x1;
+              continue;
+            }
+            // anything else pure punctuation (an actual misread ruled border) is still dropped.
             continue;
           }
           words.push({ text, confidence: w.confidence, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1 });
@@ -783,10 +804,17 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   // right at a block boundary even though the text that names it never appears anywhere in the
   // block's own data rows. Within a block, a further sub-category still only shows up as a lone
   // populated, non-numeric data row (e.g. "BUILT IN OVEN" partway down the Built-in Hob block) -
-  // required to be a real word or two (length >= 5), not the odd short OCR fragment ("Sr", "DU")
-  // that a signature or a misread border line leaves behind, which used to be mistaken for a new
-  // category and fragmented one section into several bogus ones. Nothing here reads what a label
-  // actually says beyond that length check, so it holds for any vendor's section layout.
+  // required to be a real word or two (length >= 5) containing a space, not the odd short OCR
+  // fragment ("Sr", "DU") a signature or misread border leaves behind, which used to be mistaken
+  // for a new category and fragmented one section into several bogus ones. The space requirement
+  // additionally rules out a genuine product code whose price/netto happened to OCR as empty on
+  // this particular row (confirmed: "RH-KT2959-GBV" alone in its row, with no price data recovered
+  // at all, otherwise reads as a plausible "category title" too) - a category title in this kind
+  // of document is a multi-word phrase, a product code virtually never contains a space. A code
+  // still carrying its own price-increase marker ("RES-A10C-02C *" - see the OCR word-merge above)
+  // also has a space though, so the digit check matters too: a category title never contains a
+  // digit, a product code always does. Nothing here reads what a label actually says beyond that
+  // shape, so it holds for any vendor's layout.
   let currentCategory = "";
   let lastHint: string | null = null;
   const categoryByRow = matrix.map((r, i) => {
@@ -794,7 +822,15 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
     if (hint && hint !== lastHint) currentCategory = hint;
     lastHint = hint;
     const nonEmpty = r.filter((c) => c !== "");
-    if (nonEmpty.length === 1 && nonEmpty[0].length >= 5 && parseNumeric(nonEmpty[0]) === null) currentCategory = nonEmpty[0];
+    if (
+      nonEmpty.length === 1 &&
+      nonEmpty[0].length >= 5 &&
+      /\s/.test(nonEmpty[0]) &&
+      !/\d/.test(nonEmpty[0]) &&
+      parseNumeric(nonEmpty[0]) === null
+    ) {
+      currentCategory = nonEmpty[0];
+    }
     return currentCategory;
   });
 
@@ -824,10 +860,22 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   const prunedHeaderLabels =
     ocrHeaderLabels && keepCols.length > 0 ? keepCols.map((c) => ocrHeaderLabels![c] ?? "") : ocrHeaderLabels;
 
+  // A row with no numeric value anywhere carries zero price information - whatever text landed in
+  // its other cells (a signature stroke, a misread border, a stray footnote fragment - "DU", "Ld",
+  // "DLI" on the first real document tested against this) is noise, not an unreadable product,
+  // and only clutters a price audit that's fundamentally about comparing numbers. The 3-digit
+  // floor rules out a lone stray digit ("1", "2") passing as a "price" while staying far below any
+  // real price or code in this kind of document. Real spreadsheets never hit this path - it's
+  // scoped to the reconstructed-from-OCR matrix's own noise, not a general row filter.
+  const hasUsableNumber = (r: string[]) => r.some((c) => { const n = parseNumeric(c); return n !== null && Math.abs(n) >= 100; });
+  const keepRows = isOcr ? pruned.map(hasUsableNumber) : pruned.map(() => true);
+  const numericFiltered = keepRows.every(Boolean) ? pruned : pruned.filter((_, i) => keepRows[i]);
+  const numericFilteredCategories = keepRows.every(Boolean) ? sourceCategories : sourceCategories.filter((_, i) => keepRows[i]);
+
   // Only worth a column when the document actually had section breaks - most vendor PDFs are one
   // flat list and would otherwise get a column of empty strings.
-  const hasCategories = sourceCategories.some((c) => c !== "");
-  const withCategory = hasCategories ? pruned.map((r, i) => [...r, sourceCategories[i]]) : pruned;
+  const hasCategories = numericFilteredCategories.some((c) => c !== "");
+  const withCategory = hasCategories ? numericFiltered.map((r, i) => [...r, numericFilteredCategories[i]]) : numericFiltered;
   const headerLabelsWithCategory =
     hasCategories && prunedHeaderLabels ? [...prunedHeaderLabels, "Category"] : prunedHeaderLabels;
 
