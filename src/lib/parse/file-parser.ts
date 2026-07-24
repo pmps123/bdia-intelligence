@@ -464,6 +464,8 @@ async function extractHeaderLabels(
   return labels.some((l) => l !== "") ? labels : null;
 }
 
+const BRACKET_OPENERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+
 /** Recognize one already-isolated row-band crop, returning its words filtered the same way every recognition pass is: confidence >= 40, not pure punctuation. */
 async function recognizeRowWords(worker: Awaited<ReturnType<typeof import("tesseract.js").createWorker>>, cropped: Buffer): Promise<OcrWord[]> {
   const { data } = await worker.recognize(cropped, {}, { blocks: true });
@@ -475,7 +477,26 @@ async function recognizeRowWords(worker: Awaited<ReturnType<typeof import("tesse
           const text = w.text.trim();
           if (process.env.DEBUG_WORDS) console.error(`    raw word ${JSON.stringify(text)} conf=${w.confidence.toFixed(1)}`);
           if (text === "" || w.confidence < 40) continue; // low confidence: border-line/signature noise, not real text
-          if (/^[^\p{L}\p{N}]+$/u.test(text)) continue; // pure punctuation: almost always a misread ruled border, not content
+          if (/^[^\p{L}\p{N}]+$/u.test(text)) {
+            // A lone closing bracket that Tesseract split off as its own word (common right after
+            // a product code's variant suffix, e.g. "RB-311N(GB" + ")" - confirmed on the first
+            // real document tested against this, where nearly every parenthesized code lost its
+            // close paren) reads as pure punctuation and was being dropped outright as border
+            // noise. Reattach it to the immediately preceding word on this line when that word
+            // still has an unmatched opener, instead of losing real content; anything else pure
+            // punctuation (an actual misread ruled border) is still dropped, same as before.
+            const opener = BRACKET_OPENERS[text];
+            const prev = words[words.length - 1];
+            if (opener && prev) {
+              const opens = prev.text.split(opener).length - 1;
+              const closes = prev.text.split(text).length - 1;
+              if (opens > closes) {
+                prev.text += text;
+                prev.x1 = w.bbox.x1;
+              }
+            }
+            continue;
+          }
           words.push({ text, confidence: w.confidence, x0: w.bbox.x0, x1: w.bbox.x1, y0: w.bbox.y0, y1: w.bbox.y1 });
         }
       }
@@ -515,7 +536,8 @@ async function ocrTableBlock(
         .toBuffer();
     const STANDARD_SCALE = 6;
     const RETRY_SCALE = 4;
-    let words = await recognizeRowWords(worker, await cropAt(STANDARD_SCALE));
+    const standardWords = await recognizeRowWords(worker, await cropAt(STANDARD_SCALE));
+    let words = standardWords;
     // a real product row is a code plus at least one price - fewer than 2 surviving words means
     // this pass likely lost something. Retrying the identical crop gets the identical result -
     // confirmed directly, Tesseract's recognition is deterministic for identical input within a
@@ -532,6 +554,25 @@ async function ocrTableBlock(
         // relative to every row recognized at the standard scale (confirmed directly).
         const factor = STANDARD_SCALE / RETRY_SCALE;
         words = retryWords.map((w) => ({ ...w, x0: w.x0 * factor, x1: w.x1 * factor, y0: w.y0 * factor, y1: w.y1 * factor }));
+        // The two scales don't just differ in confidence on the SAME text - they can each glyph-
+        // read the same product code differently and both be partly wrong (confirmed directly: one
+        // real cell read as "IRB31IN(GB)" at 6x - garbled digits, but the closing paren present -
+        // and "RB-311N(GB" at 4x - correct digits, closing paren glyph simply never recognized).
+        // The word-count tie-break above picked the 4x reading here for its digits, silently
+        // losing a closing bracket the 6x reading actually had. Only that specific missing closer
+        // is borrowed back, not the rest of the discarded word, since it typically lost the
+        // tie-break for a reason (worse digits).
+        const code = words[0];
+        const otherCode = standardWords[0];
+        if (code && otherCode) {
+          const opens = (code.text.match(/\(/g) ?? []).length;
+          const closes = (code.text.match(/\)/g) ?? []).length;
+          const otherOpens = (otherCode.text.match(/\(/g) ?? []).length;
+          const otherCloses = (otherCode.text.match(/\)/g) ?? []).length;
+          if (opens > closes && otherCloses >= otherOpens && otherCode.text.endsWith(")")) {
+            words[0] = { ...code, text: code.text + ")" };
+          }
+        }
       }
     }
     if (process.env.DEBUG_ROWS) {
