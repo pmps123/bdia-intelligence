@@ -48,7 +48,7 @@ export function NoteEditor({
 
   React.useEffect(() => {
     setBlocksLoading(true);
-    fetch(`/api/blocks?ws=${noteId}`)
+    fetch(`/api/blocks?pageId=${noteId}`)
       .then((r) => r.json())
       .then((d) => setBlocks(d.blocks ?? []))
       .catch(() => {})
@@ -62,7 +62,7 @@ export function NoteEditor({
     fetch("/api/blocks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace: noteId, type: "text" }),
+      body: JSON.stringify({ pageId: noteId, type: "text" }),
     })
       .then((r) => r.json())
       .then((d) => {
@@ -128,7 +128,7 @@ export function NoteEditor({
     const res = await fetch("/api/blocks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace: noteId, type }),
+      body: JSON.stringify({ pageId: noteId, type }),
     });
     if (res.ok) {
       const d = await res.json();
@@ -142,7 +142,7 @@ export function NoteEditor({
     const res = await fetch("/api/blocks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace: noteId, type: "text" }),
+      body: JSON.stringify({ pageId: noteId, type: "text" }),
     });
     if (!res.ok) return;
     const d = await res.json();
