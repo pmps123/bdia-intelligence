@@ -292,6 +292,24 @@ function detectRowBands(
     for (let x = 0; x < width; x++) if (px[off + x] < 190) c++;
     return c / width;
   };
+  // Longest unbroken run of dark pixels in a row, as a fraction of width. A ruled border line is
+  // one near-continuous stroke (a high run); dense text is many short glyphs separated by gaps
+  // (a low run) even when it's just as dark overall - confirmed directly on a real document, where
+  // a densely-packed text row and a genuine border row both reached ~0.20-0.27 dark-pixel fraction,
+  // making that fraction alone unable to tell them apart, while their longest run differed by 10x+
+  // (text stayed under ~0.05, the border ran 0.15-0.22).
+  const maxRunRow = (y: number) => {
+    let best = 0;
+    let run = 0;
+    const off = y * width;
+    for (let x = 0; x < width; x++) {
+      if (px[off + x] < 190) {
+        run++;
+        if (run > best) best = run;
+      } else run = 0;
+    }
+    return best / width;
+  };
   const rowFrac = Array.from({ length: height }, (_, y) => darkFracRow(y));
   const peaks: number[] = [];
   for (let y = 1; y < height - 1; y++) {
@@ -326,6 +344,7 @@ function detectRowBands(
   const boundaries: number[] = [0];
   for (const y of linePeaks.slice(1)) if (y - boundaries[boundaries.length - 1] > minLineGap) boundaries.push(y);
   boundaries.push(height);
+  if (process.env.DEBUG_PEAKS) console.error(`peaks: ${peaks.join(",")}\nlinePeaks: ${linePeaks.join(",")}\nminLineGap=${minLineGap}\nrowBoundaries: ${boundaries.join(",")}`);
 
   const rawBands: { top: number; bottom: number }[] = [];
   for (let i = 0; i < boundaries.length - 1; i++) {
@@ -371,9 +390,20 @@ function detectRowBands(
       // still has SOME internal gap, just fainter than the standard row-to-row one. Only fall back
       // to blind equal-division when even that finds nothing (the truly undivided dense case this
       // was originally written for).
+      // The 0.12 dark-fraction floor alone isn't enough here: a densely-packed text line can clear
+      // it on its own texture (confirmed directly - see maxRunRow above), which used to read as
+      // several extra row boundaries INSIDE a single text row and shatter it into fragments far
+      // smaller than a real row. Requiring a border-like contiguous run too keeps this pass
+      // sensitive to genuine faint dividers while rejecting a merely-dense line of text.
+      const BORDER_RUN_THRESHOLD = 0.08;
       const subPeaks: number[] = [];
       for (let y = b.top + 1; y < b.bottom - 1; y++) {
-        if (rowFrac[y] > 0.12 && rowFrac[y] >= rowFrac[y - 1] && rowFrac[y] >= rowFrac[y + 1]) subPeaks.push(y);
+        if (
+          rowFrac[y] > 0.12 &&
+          maxRunRow(y) > BORDER_RUN_THRESHOLD &&
+          rowFrac[y] >= rowFrac[y - 1] &&
+          rowFrac[y] >= rowFrac[y + 1]
+        ) subPeaks.push(y);
       }
       const subBoundaries: number[] = [b.top];
       for (const y of subPeaks) if (y - subBoundaries[subBoundaries.length - 1] > 5) subBoundaries.push(y);
@@ -394,6 +424,7 @@ function detectRowBands(
       // peaks came back at this more sensitive threshold even after being merged away up above).
       // Equal division, which can only produce plausibly row-sized pieces by construction, is the
       // safer fallback than trusting a resplit that doesn't.
+      if (process.env.DEBUG_PEAKS) console.error(`resplit band ${b.top}-${b.bottom} (h=${h}, typical=${typical}): subPeaks=${subPeaks.join(",")} subBands=${JSON.stringify(subBands)}`);
       if (subBands.length > 1 && subBands.every((sb) => sb.bottom - sb.top >= typical * 0.5)) {
         bands.push(...subBands);
       } else {
@@ -581,7 +612,13 @@ async function ocrTableBlock(
   if (process.env.DEBUG_ROWS) console.error(`block ${width}x${height}, ${bands.length} bands:`, bands.map((b) => `${b.top}-${b.bottom}`).join(", "));
 
   const STANDARD_SCALE = 6;
-  const RETRY_SCALE = 4;
+  // Two different upscale factors, tried in order until the row is complete - not just one.
+  // Confidence on the same borderline glyph swings hard with scale in either direction (confirmed
+  // directly: a code unreadable at 6x scored 0%, still failed at 4x (32%), but cleared cleanly at
+  // 8x (83%); a different row's price went the other way and needed the smaller scale). One retry
+  // scale only recovers whichever rows happen to prefer that specific direction; trying both catches
+  // both.
+  const RETRY_SCALES = [4, 8];
   const cropAt = (band: { top: number; bottom: number }, scale: number) =>
     sharp(px, { raw: { width, height, channels: 1 } })
       .extract({ left: 0, top: band.top, width, height: band.bottom - band.top })
@@ -617,14 +654,15 @@ async function ocrTableBlock(
     // confidence on borderline text swings meaningfully with it (confirmed directly: the same
     // row's price scored 3%, 96%, and 0% confidence at 6x, 4x and 8x respectively), so it's worth
     // an independent second attempt rather than a repeat.
-    if (words.length < retryFloor) {
-      const retryWords = await recognizeRowWords(worker, await cropAt(band, RETRY_SCALE));
+    for (const retryScale of RETRY_SCALES) {
+      if (words.length >= retryFloor) break; // already complete - a scale that helped a different row doesn't get tried on this one
+      const retryWords = await recognizeRowWords(worker, await cropAt(band, retryScale));
       if (retryWords.length > words.length) {
         // detectColumnBoundaries/wordsToRow compare x-positions across every row in the block, so
         // a retry recognized at a different scale must have its coordinates normalized back to the
         // standard scale first - otherwise this row's words land in the wrong column bucket
         // relative to every row recognized at the standard scale (confirmed directly).
-        const factor = STANDARD_SCALE / RETRY_SCALE;
+        const factor = STANDARD_SCALE / retryScale;
         words = retryWords.map((w) => ({ ...w, x0: w.x0 * factor, x1: w.x1 * factor, y0: w.y0 * factor, y1: w.y1 * factor }));
         // The two scales don't just differ in confidence on the SAME text - they can each glyph-
         // read the same product code differently and both be partly wrong (confirmed directly: one
