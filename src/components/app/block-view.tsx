@@ -14,14 +14,19 @@ import {
   Trash2,
   Upload,
   X,
+  Kanban as KanbanIcon,
+  List as ListIcon,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { TableEditor } from "@/components/app/table-editor";
+import { TableEditor, type EditableRow } from "@/components/app/table-editor";
 import { TimelineView } from "@/components/app/timeline-view";
+import { KanbanView } from "@/components/app/kanban-view";
+import { ListView } from "@/components/app/list-view";
+import { TaskDetailDrawer } from "@/components/app/task-detail-drawer";
 import { cn, generateUUID } from "@/lib/utils";
 import type {
   BlockContent,
@@ -378,49 +383,66 @@ export function BulletBlockView({
 
 const DEFAULT_VIEW: TableViewDef = { id: "table-view", name: "Table View", type: "table" };
 
-/** "+ Add view" — Table is one click; Timeline needs to know which Date columns are start/end, so
- *  picking those is a second step in the same popover rather than a whole separate dialog. */
+/** "+" Add view — Table is one click; Timeline needs date column config; Board needs group-by column. */
 function AddViewMenu({
   dateColumns,
+  groupableColumns,
   onAdd,
 }: {
   dateColumns: { id: string; name: string }[];
+  groupableColumns: { id: string; name: string }[];
   onAdd: (view: TableViewDef) => void;
 }) {
   const [open, setOpen] = React.useState(false);
-  const [pickingTimeline, setPickingTimeline] = React.useState(false);
+  const [step, setStep] = React.useState<"main" | "timeline" | "board">("main");
   const [startId, setStartId] = React.useState("");
   const [endId, setEndId] = React.useState("");
+  const [groupById, setGroupById] = React.useState("");
 
   const openTimelinePicker = () => {
     setStartId(dateColumns[0]?.id ?? "");
     setEndId(dateColumns[1]?.id ?? dateColumns[0]?.id ?? "");
-    setPickingTimeline(true);
+    setStep("timeline");
+  };
+
+  const openBoardPicker = () => {
+    setGroupById(groupableColumns[0]?.id ?? "");
+    setStep("board");
   };
 
   const reset = () => {
-    setPickingTimeline(false);
+    setStep("main");
     setOpen(false);
   };
 
   return (
-    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setPickingTimeline(false); }}>
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setStep("main"); }}>
       <PopoverTrigger asChild>
         <button className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-primary cursor-pointer" title="Add view">
           <Plus className="h-3.5 w-3.5" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-60 p-1.5">
-        {!pickingTimeline ? (
+        {step === "main" ? (
           <div className="space-y-0.5">
+            <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Add View</p>
             <button
-              onClick={() => {
-                onAdd({ id: generateUUID(), name: "Table View", type: "table" });
-                reset();
-              }}
+              onClick={() => { onAdd({ id: generateUUID(), name: "Table View", type: "table" }); reset(); }}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
             >
               <Table2 className="h-4 w-4" /> Table
+            </button>
+            <button
+              onClick={() => { onAdd({ id: generateUUID(), name: "List View", type: "list" }); reset(); }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+            >
+              <ListIcon className="h-4 w-4" /> List
+            </button>
+            <button
+              onClick={openBoardPicker}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+            >
+              <KanbanIcon className="h-4 w-4" /> Board
             </button>
             <button
               onClick={openTimelinePicker}
@@ -431,6 +453,28 @@ function AddViewMenu({
               <CalendarRange className="h-4 w-4" /> Timeline
             </button>
           </div>
+        ) : step === "board" ? (
+          <div className="space-y-2 p-1">
+            <p className="text-xs font-medium text-muted-foreground">Group board by which column?</p>
+            {groupableColumns.length > 0 ? (
+              <>
+                <select value={groupById} onChange={(e) => setGroupById(e.target.value)} className="mt-0.5 h-7 w-full rounded border bg-transparent px-1.5 text-sm">
+                  {groupableColumns.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  className="h-7 w-full text-xs"
+                  onClick={() => { onAdd({ id: generateUUID(), name: "Board", type: "board", groupByColumnId: groupById }); reset(); }}
+                >
+                  Create board view
+                </Button>
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground/70">Add a Status or Select column first to use a Board view.</p>
+            )}
+          </div>
         ) : (
           <div className="space-y-2 p-1">
             <p className="text-xs font-medium text-muted-foreground">Which Date columns define each bar?</p>
@@ -438,9 +482,7 @@ function AddViewMenu({
               Start
               <select value={startId} onChange={(e) => setStartId(e.target.value)} className="mt-0.5 h-7 w-full rounded border bg-transparent px-1.5 text-sm">
                 {dateColumns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
+                  <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
             </label>
@@ -448,19 +490,14 @@ function AddViewMenu({
               End
               <select value={endId} onChange={(e) => setEndId(e.target.value)} className="mt-0.5 h-7 w-full rounded border bg-transparent px-1.5 text-sm">
                 {dateColumns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
+                  <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
             </label>
             <Button
               size="sm"
               className="h-7 w-full text-xs"
-              onClick={() => {
-                onAdd({ id: generateUUID(), name: "Timeline", type: "timeline", startColumnId: startId, endColumnId: endId });
-                reset();
-              }}
+              onClick={() => { onAdd({ id: generateUUID(), name: "Timeline", type: "timeline", startColumnId: startId, endColumnId: endId }); reset(); }}
             >
               Create timeline view
             </Button>
@@ -470,6 +507,7 @@ function AddViewMenu({
     </Popover>
   );
 }
+
 
 /** Same normalization the component's useMemo does, as a pure function — reusable inside a
  *  functional onChange updater, which always resolves against the truly-latest content rather
@@ -481,12 +519,14 @@ function tablesFromContent(c: TableBlockContent): SubTableDef[] {
 
 export function TableBlockView({ content, onChange }: { content: TableBlockContent; onChange: (c: BlockContentUpdater) => void }) {
   const tables: SubTableDef[] = React.useMemo(() => tablesFromContent(content), [content]);
+  const [selectedRow, setSelectedRow] = React.useState<EditableRow | null>(null);
 
   const activeId = content.activeTableId || tables[0].id;
   const activeTable = tables.find((t) => t.id === activeId) || tables[0];
   const views = activeTable.views && activeTable.views.length > 0 ? activeTable.views : [DEFAULT_VIEW];
   const activeView = views.find((v) => v.id === activeTable.activeViewId) ?? views[0];
   const dateColumns = activeTable.columns.filter((c) => c.type === "date").map((c) => ({ id: c.id, name: c.name }));
+  const groupableColumns = activeTable.columns.filter((c) => c.type === "status" || c.type === "select");
 
   // Resolves against the latest content at apply-time (not this render's closure) so that two
   // edits fired back to back in one interaction (e.g. TagCellEditor creating a new option, then
@@ -588,7 +628,7 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
                 v.id === activeView.id ? "text-accent-foreground" : "text-muted-foreground"
               )}
             >
-              {v.type === "timeline" ? <CalendarRange className="h-3.5 w-3.5" /> : <Table2 className="h-3.5 w-3.5" />}
+              {v.type === "timeline" ? <CalendarRange className="h-3.5 w-3.5" /> : v.type === "board" ? <KanbanIcon className="h-3.5 w-3.5" /> : v.type === "list" ? <ListIcon className="h-3.5 w-3.5" /> : <Table2 className="h-3.5 w-3.5" />}
               {v.name}
             </button>
             {views.length > 1 && (
@@ -601,7 +641,7 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
             )}
           </div>
         ))}
-        <AddViewMenu dateColumns={dateColumns} onAdd={addView} />
+        <AddViewMenu dateColumns={dateColumns} groupableColumns={groupableColumns} onAdd={addView} />
       </div>
 
       {activeView.type === "timeline" && activeView.startColumnId && activeView.endColumnId ? (
@@ -612,12 +652,49 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
           endColumnId={activeView.endColumnId}
           onChangeRows={(rows) => patchActiveTable({ rows })}
         />
+      ) : activeView.type === "board" ? (
+        <KanbanView
+          columns={activeTable.columns}
+          rows={activeTable.rows}
+          groupByColumnId={activeView.groupByColumnId}
+          onChangeRows={(rows) => patchActiveTable({ rows })}
+          onCardClick={(row) => setSelectedRow(row)}
+          onAddCard={(status) => {
+            const groupCol = activeTable.columns.find((c) => c.type === "status" || c.type === "select") ?? activeTable.columns[0];
+            const newRow = { id: generateUUID(), cells: { [groupCol.id]: status } };
+            patchActiveTable({ rows: [...activeTable.rows, newRow] });
+          }}
+        />
+      ) : activeView.type === "list" ? (
+        <ListView
+          columns={activeTable.columns}
+          rows={activeTable.rows}
+          onChangeRows={(rows) => patchActiveTable({ rows })}
+          onRowClick={(row) => setSelectedRow(row)}
+          onAddRow={() => patchActiveTable({ rows: [...activeTable.rows, { id: generateUUID(), cells: {} }] })}
+          onRemoveRow={(id) => patchActiveTable({ rows: activeTable.rows.filter((r) => r.id !== id) })}
+        />
       ) : (
         <TableEditor
           columns={activeTable.columns}
           rows={activeTable.rows}
           onChangeColumns={(cols) => patchActiveTable({ columns: cols })}
           onChangeRows={(rows) => patchActiveTable({ rows })}
+        />
+      )}
+
+      {selectedRow && (
+        <TaskDetailDrawer
+          row={selectedRow}
+          columns={activeTable.columns}
+          onClose={() => setSelectedRow(null)}
+          onCellChange={(rowId, colId, val) => {
+            const updatedRows = activeTable.rows.map((r) =>
+              r.id === rowId ? { ...r, cells: { ...r.cells, [colId]: val } } : r
+            );
+            patchActiveTable({ rows: updatedRows });
+            setSelectedRow((prev) => (prev ? { ...prev, cells: { ...prev.cells, [colId]: val } } : null));
+          }}
         />
       )}
     </div>

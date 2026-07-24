@@ -7,17 +7,16 @@ const NOTE_TYPES: NoteType[] = ["text", "heading", "bullet", "table", "image"];
 
 export async function GET(req: NextRequest) {
   const ws = req.nextUrl.searchParams.get("ws") ?? "rafli";
-  const notes = await prisma.note.findMany({ where: { workspace: ws }, orderBy: { order: "asc" } });
-  return NextResponse.json({ notes: notes.map((n) => ({ ...n, content: safeJson(n.content, {}) })) });
+  const pages = await prisma.page.findMany({ where: { workspace: ws }, orderBy: { order: "asc" } });
+  return NextResponse.json({ notes: pages.map((n) => ({ ...n, content: {} })) });
 }
 
 export async function POST(req: NextRequest) {
-  const { workspace, type } = await req.json().catch(() => ({}));
-  if (!NOTE_TYPES.includes(type)) return NextResponse.json({ error: "Invalid note type" }, { status: 400 });
+  const { workspace } = await req.json().catch(() => ({}));
   const ws = workspace || "rafli";
-  const last = await prisma.note.findFirst({ where: { workspace: ws }, orderBy: { order: "desc" } });
-  const note = await prisma.note.create({
-    data: { workspace: ws, type, order: (last?.order ?? -1) + 1, content: JSON.stringify(emptyBlockContent(type)) },
+  const last = await prisma.page.findFirst({ where: { workspace: ws }, orderBy: { order: "desc" } });
+  const page = await prisma.page.create({
+    data: { workspace: ws, order: (last?.order ?? -1) + 1, title: "Untitled" },
   });
-  return NextResponse.json({ note: { ...note, content: safeJson(note.content, {}) } });
+  return NextResponse.json({ note: { ...page, content: {} } });
 }

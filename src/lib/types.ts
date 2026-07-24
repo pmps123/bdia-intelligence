@@ -168,10 +168,12 @@ export interface TableRowDef {
 export interface TableViewDef {
   id: string;
   name: string;
-  type: "table" | "timeline";
+  type: "table" | "timeline" | "board" | "list";
   /** Timeline only: which "date" columns a row's bar spans. A single-date column can fill both. */
   startColumnId?: string;
   endColumnId?: string;
+  /** Board only: which column to group cards by */
+  groupByColumnId?: string;
 }
 
 export interface SubTableDef {

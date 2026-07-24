@@ -5,17 +5,15 @@ import { safeJson } from "@/lib/utils";
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { title, content, order, type } = await req.json().catch(() => ({}));
-  const data: { title?: string; content?: string; order?: number; type?: string } = {};
+  const data: { title?: string; order?: number } = {};
   if (typeof title === "string") data.title = title;
-  if (content !== undefined) data.content = JSON.stringify(content);
   if (typeof order === "number") data.order = order;
-  if (typeof type === "string") data.type = type;
-  const note = await prisma.note.update({ where: { id }, data });
-  return NextResponse.json({ note: { ...note, content: safeJson(note.content, {}) } });
+  const page = await prisma.page.update({ where: { id }, data });
+  return NextResponse.json({ note: { ...page, content: {} } });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  await prisma.note.delete({ where: { id } });
+  await prisma.page.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

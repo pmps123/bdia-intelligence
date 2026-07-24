@@ -25,6 +25,8 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { ChatPanel } from "@/components/app/chat-panel";
+import { CommandMenu } from "@/components/app/command-menu";
+import { Sidebar } from "@/components/app/sidebar";
 import { cn } from "@/lib/utils";
 import { WORKSPACES, DEFAULT_WORKSPACE, getWorkspace, hasTool, type ToolId } from "@/lib/workspaces";
 
@@ -333,85 +335,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const renderSidebar = (sbCollapsed: boolean) => (
     <>
-      {/* brand */}
-      <div className={cn("flex pt-3 pb-2", sbCollapsed ? "flex-col items-center gap-2 px-2" : "items-center gap-2 px-2.5")}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/bdia-mark.png" alt="BDIA" className="h-8 w-8 shrink-0 rounded-lg object-cover ring-1 ring-white/10" />
+      <div className={cn("flex pt-3 pb-2", sbCollapsed ? "flex-col items-center gap-2 px-2" : "items-center justify-between px-2.5")}>
         {!sbCollapsed && (
-          <div className="min-w-0 flex-1 leading-none">
-            <div className="font-display text-sm font-bold tracking-tight text-sidebar-accent-foreground">BDIA</div>
-            <div className="mt-0.5 text-[9.5px] font-medium uppercase tracking-[0.18em] text-sidebar-foreground/50">Intelligence</div>
+          <div className="font-display text-sm font-bold tracking-tight text-sidebar-accent-foreground flex items-center gap-2">
+            <img src="/bdia-mark.png" alt="BDIA" className="h-5 w-5 shrink-0 rounded-sm object-cover ring-1 ring-white/10" />
+            BDIA
           </div>
         )}
         <button
           onClick={toggleCollapsed}
           title={sbCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="hidden md:inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground cursor-pointer"
-          data-testid="sidebar-collapse-toggle"
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground cursor-pointer"
         >
           {sbCollapsed ? <PanelLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
         </button>
       </div>
 
-      {/* workspace switcher */}
-      <div className="px-2 pb-2">
-        <WorkspaceSwitcher workspaceId={workspaceId} onChange={setWorkspaceId} collapsed={sbCollapsed} />
-      </div>
-
-      <div className="mx-3 border-t border-sidebar-border" />
-
-      {/* nav */}
-      <nav className="flex flex-1 flex-col gap-3 overflow-y-auto px-2 py-3 thin-scroll">
-        <NavItem href="/" label="Home" icon={HomeIcon} active={pathname === "/"} collapsed={sbCollapsed} />
-
-        <div className="flex flex-col gap-0.5">
-          {sbCollapsed ? (
-            <button
-              onClick={handleAddNote}
-              title="Add page"
-              data-testid="sidebar-new-page-btn"
-              className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground cursor-pointer"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-          ) : (
-            <div className="group flex items-center justify-between px-2.5 pb-1 pt-0.5">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/45">Pages</span>
-              <button
-                onClick={handleAddNote}
-                title="Add page"
-                data-testid="sidebar-new-page-btn"
-                className="rounded p-0.5 text-sidebar-foreground/60 opacity-0 transition-all hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-hover:opacity-100 cursor-pointer"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          )}
-          {/* the order:-1 note is the workspace Home page — already pinned above, not listed twice */}
-          {notes.filter((n) => n.order !== -1).map((n) => (
-            <NavItem
-              key={n.id}
-              href={`/notes?id=${n.id}`}
-              label={n.title || "Untitled"}
-              icon={FileText}
-              active={pathname === "/notes" && activeNoteId === n.id}
-              collapsed={sbCollapsed}
-            />
-          ))}
-          {notes.filter((n) => n.order !== -1).length === 0 && !sbCollapsed && (
-            <p className="px-2.5 py-1.5 text-xs italic text-sidebar-foreground/40">No pages yet.</p>
-          )}
-        </div>
-
-        <NavSection label="Tools" collapsed={sbCollapsed}>
-          {toolNav.map(({ href, label, icon: Icon, match }) => (
-            <NavItem key={href} href={href} label={label} icon={Icon} active={match(pathname)} collapsed={sbCollapsed} />
-          ))}
-          {toolNav.length === 0 && !sbCollapsed && (
-            <p className="px-2.5 py-1.5 text-xs text-sidebar-foreground/50">No tools assigned yet.</p>
-          )}
-        </NavSection>
-      </nav>
+      <Sidebar 
+        workspaceId={workspaceId} 
+        pages={notes} 
+        onAddPage={handleAddNote} 
+        collapsed={sbCollapsed} 
+        WorkspaceSwitcher={<WorkspaceSwitcher workspaceId={workspaceId} onChange={setWorkspaceId} collapsed={sbCollapsed} />} 
+      />
 
       {/* footer */}
       <div className="border-t border-sidebar-border px-2 py-3">
@@ -496,6 +442,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             >
               <Sparkles className="h-3.5 w-3.5 text-primary" /> Ask AI
             </button>
+            <kbd className="hidden items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground sm:flex">
+              <span>⌘</span>K
+            </kbd>
           </header>
 
           <div key={pathname} className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:duration-300">
@@ -504,6 +453,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
 
         <ChatPanel workspaceId={workspaceId} open={chatOpen} onOpenChange={setChatOpen} />
+        <CommandMenu />
       </div>
     </WorkspaceContext.Provider>
   );

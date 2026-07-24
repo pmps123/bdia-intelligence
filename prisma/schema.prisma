@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -176,18 +176,6 @@ model TransformRun {
   updatedAt DateTime @updatedAt
 }
 
-model Block {
-  id        String   @id @default(cuid())
-  workspace String // which workspace's page this belongs to
-  order     Int      @default(0)
-  type      String // text | heading | bullet | table | image
-  content   String // JSON, shape depends on type
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([workspace])
-}
-
 model SalesmanRow {
   id          String   @id @default(cuid())
   workspace   String // rafli | wijaya
@@ -210,16 +198,33 @@ model SalesmanRow {
   @@index([workspace, bulan])
 }
 
-model Note {
+model Page {
   id        String   @id @default(cuid())
   workspace String
   title     String   @default("Untitled")
-  type      String // text | heading | bullet | table | image — same shapes as Block
-  content   String // JSON, same shape as Block.content
+  parentId  String?
+  parent    Page?    @relation("PageHierarchy", fields: [parentId], references: [id])
+  children  Page[]   @relation("PageHierarchy")
   order     Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  blocks    Block[]
 
+  @@index([workspace])
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  workspace String   // which workspace's page this belongs to
+  pageId    String
+  page      Page     @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  order     Int      @default(0)
+  type      String   // very diverse block types (String instead of Enum)
+  content   String   // JSON, shape depends on type
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([pageId])
   @@index([workspace])
 }
 

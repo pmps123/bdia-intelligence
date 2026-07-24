@@ -188,7 +188,7 @@ export function NoteEditor({
   };
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
+    <div className="mx-auto max-w-screen-2xl w-full px-10 py-10">
       {showChrome && (
         <div className="mb-8 flex items-start justify-between gap-4">
           <Input
