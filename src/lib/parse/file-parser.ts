@@ -325,13 +325,14 @@ function detectRowBands(
   // that tall, and not simply blank margin, almost certainly hides that many un-detected rows.
   const heights = rawBands.map((b) => b.bottom - b.top).sort((a, b) => a - b);
   const typical = heights[Math.floor(heights.length * 0.4)] ?? 0;
+  if (process.env.DEBUG_ROWS) console.error(`typical=${typical} heights=${heights.join(",")}`);
 
   // The very first band, when it's this same oversized mixed-content case, is exactly the
   // logo/title/column-header region above the table - genuinely worth reading as one multi-line
   // block (see extractHeaderLabels) instead of only mining a stray first data row out of it.
   const first = rawBands[0];
   const headerRegion =
-    first && first.top <= 3 && typical > 0 && first.bottom - first.top > typical * 1.8
+    first && first.top <= 3 && typical > 0 && first.bottom - first.top > typical * 1.5
       ? { top: first.top, bottom: first.bottom }
       : null;
 
@@ -343,7 +344,7 @@ function detectRowBands(
     if (headerRegion && b.top === headerRegion.top && b.bottom === headerRegion.bottom) continue;
     const h = b.bottom - b.top;
     const avgInk = rowFrac.slice(b.top, b.bottom).reduce((a, v) => a + v, 0) / Math.max(1, h);
-    if (typical > 0 && h > typical * 1.8 && avgInk > 0.02) {
+    if (typical > 0 && h > typical * 1.5 && avgInk > 0.02) {
       // An oversized band isn't always a uniform run of identical rows, though - the region right
       // below a page's logo/title regularly mixes a faint logo, a section header and the first
       // real data row in one un-detected span (confirmed on the first real document tested
