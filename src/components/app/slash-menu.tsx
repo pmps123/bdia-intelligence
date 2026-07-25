@@ -36,7 +36,7 @@ import {
   FileSearch,
   Bell
 } from "lucide-react";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Command, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 
 export type SlashMenuItem = {
   id: string;
@@ -44,6 +44,8 @@ export type SlashMenuItem = {
   icon: React.ElementType;
   description?: string;
   type: string;
+  initialViewType?: string;
+  contentOverride?: Record<string, unknown>;
 };
 
 export type SlashMenuGroup = {
@@ -56,12 +58,12 @@ export const SLASH_MENU_GROUPS: SlashMenuGroup[] = [
     name: "Basic",
     items: [
       { id: "text", label: "Text", type: "text", icon: Type, description: "Just start typing with plain text." },
-      { id: "h1", label: "Heading 1", type: "heading_1", icon: Heading1, description: "Big section heading." },
-      { id: "h2", label: "Heading 2", type: "heading_2", icon: Heading2, description: "Medium section heading." },
-      { id: "h3", label: "Heading 3", type: "heading_3", icon: Heading3, description: "Small section heading." },
-      { id: "h4", label: "Heading 4", type: "heading_4", icon: Heading4, description: "Extra small section heading." },
+      { id: "h1", label: "Heading 1", type: "heading", icon: Heading1, description: "Big section heading.", contentOverride: { level: 1 } },
+      { id: "h2", label: "Heading 2", type: "heading", icon: Heading2, description: "Medium section heading.", contentOverride: { level: 2 } },
+      { id: "h3", label: "Heading 3", type: "heading", icon: Heading3, description: "Small section heading.", contentOverride: { level: 3 } },
+      { id: "h4", label: "Heading 4", type: "heading", icon: Heading4, description: "Extra small section heading.", contentOverride: { level: 4 } },
       { id: "bullet", label: "Bullet List", type: "bullet", icon: List, description: "Create a simple bulleted list." },
-      { id: "number", label: "Number List", type: "number", icon: ListOrdered, description: "Create a numbered list." },
+      { id: "number", label: "Number List", type: "numbered", icon: ListOrdered, description: "Create a numbered list." },
       { id: "todo", label: "To-Do List", type: "todo", icon: CheckSquare, description: "Track tasks with a to-do list." },
       { id: "toggle", label: "Toggle List", type: "toggle", icon: ListCollapse, description: "Toggles can hide and show content inside." },
       { id: "page", label: "Page", type: "page", icon: FileText, description: "Embed a sub-page inside this page." },
@@ -83,13 +85,13 @@ export const SLASH_MENU_GROUPS: SlashMenuGroup[] = [
   {
     name: "Database Views",
     items: [
-      { id: "db_table", label: "Table view", type: "database_view", icon: Table, description: "Display a database as a table." },
-      { id: "db_board", label: "Board view", type: "database_view", icon: Kanban, description: "Display a database as a Kanban board." },
-      { id: "db_gallery", label: "Gallery view", type: "database_view", icon: LayoutGrid, description: "Display a database as a visual gallery." },
-      { id: "db_list", label: "List view", type: "database_view", icon: ListTodo, description: "Display a database as a compact list." },
-      { id: "db_dashboard", label: "Dashboard view", type: "database_view", icon: LayoutDashboard, description: "Display a database as a metric dashboard." },
-      { id: "db_calendar", label: "Calendar view", type: "database_view", icon: Calendar, description: "Display a database as a calendar." },
-      { id: "db_timeline", label: "Timeline view", type: "database_view", icon: Clock, description: "Display a database as a Gantt chart." },
+      { id: "db_table", label: "Table view", type: "database_view", icon: Table, description: "Display a database as a table.", initialViewType: "table" },
+      { id: "db_board", label: "Board view", type: "database_view", icon: Kanban, description: "Display a database as a Kanban board.", initialViewType: "board" },
+      { id: "db_gallery", label: "Gallery view", type: "database_view", icon: LayoutGrid, description: "Display a database as a visual gallery.", initialViewType: "gallery" },
+      { id: "db_list", label: "List view", type: "database_view", icon: ListTodo, description: "Display a database as a compact list.", initialViewType: "list" },
+      { id: "db_dashboard", label: "Dashboard view", type: "database_view", icon: LayoutDashboard, description: "Display a database as a metric dashboard.", initialViewType: "dashboard" },
+      { id: "db_calendar", label: "Calendar view", type: "database_view", icon: Calendar, description: "Display a database as a calendar.", initialViewType: "calendar" },
+      { id: "db_timeline", label: "Timeline view", type: "database_view", icon: Clock, description: "Display a database as a Gantt chart.", initialViewType: "timeline" },
       { id: "db_full", label: "Database Full Page", type: "database_full", icon: Database, description: "Create a full page database." },
     ],
   },
@@ -98,12 +100,12 @@ export const SLASH_MENU_GROUPS: SlashMenuGroup[] = [
     items: [
       { id: "chart", label: "Chart Data", type: "chart", icon: BarChart, description: "Visualize data with a chart." },
       { id: "toc", label: "Table of Content", type: "toc", icon: ListTree, description: "Show an outline of this page." },
-      { id: "toggle_h1", label: "Toggle Heading 1", type: "toggle_h1", icon: Heading1, description: "Hide content inside a large heading." },
-      { id: "toggle_h2", label: "Toggle Heading 2", type: "toggle_h2", icon: Heading2, description: "Hide content inside a medium heading." },
-      { id: "toggle_h3", label: "Toggle Heading 3", type: "toggle_h3", icon: Heading3, description: "Hide content inside a small heading." },
-      { id: "col_2", label: "2 Columns", type: "column_2", icon: Columns2, description: "Create 2 columns of blocks." },
-      { id: "col_3", label: "3 Columns", type: "column_3", icon: Columns3, description: "Create 3 columns of blocks." },
-      { id: "col_4", label: "4 Columns", type: "column_4", icon: Columns4, description: "Create 4 columns of blocks." },
+      { id: "toggle_h1", label: "Toggle Heading 1", type: "toggle", icon: Heading1, description: "Hide content inside a large heading.", contentOverride: { level: 1 } },
+      { id: "toggle_h2", label: "Toggle Heading 2", type: "toggle", icon: Heading2, description: "Hide content inside a medium heading.", contentOverride: { level: 2 } },
+      { id: "toggle_h3", label: "Toggle Heading 3", type: "toggle", icon: Heading3, description: "Hide content inside a small heading.", contentOverride: { level: 3 } },
+      { id: "col_2", label: "2 Columns", type: "columns", icon: Columns2, description: "Create 2 columns of blocks.", contentOverride: { columnCount: 2, columns: [[], []] } },
+      { id: "col_3", label: "3 Columns", type: "columns", icon: Columns3, description: "Create 3 columns of blocks.", contentOverride: { columnCount: 3, columns: [[], [], []] } },
+      { id: "col_4", label: "4 Columns", type: "columns", icon: Columns4, description: "Create 4 columns of blocks.", contentOverride: { columnCount: 4, columns: [[], [], [], []] } },
     ],
   },
   {
@@ -118,27 +120,36 @@ export const SLASH_MENU_GROUPS: SlashMenuGroup[] = [
 interface SlashMenuProps {
   onSelect: (type: string, id: string) => void;
   query?: string;
+  /** Flat index among filtered items — keeps keyboard nav in sync when parent handles ArrowUp/Down. */
+  activeIndex?: number;
 }
 
-export function SlashMenu({ onSelect, query = "" }: SlashMenuProps) {
-  // If we had a floating popover, this would be wrapped in a Popover/Dialog
-  // But for the block editor, it usually renders directly anchored to the block cursor
-  
+export function SlashMenu({ onSelect, query = "", activeIndex }: SlashMenuProps) {
+  const q = query.toLowerCase();
+  const filteredGroups = SLASH_MENU_GROUPS.map((group) => ({
+    ...group,
+    items: q ? group.items.filter((item) => item.label.toLowerCase().includes(q)) : group.items,
+  })).filter((group) => group.items.length > 0);
+
+  let flatIndex = 0;
+
   return (
     <div className="w-80 rounded-lg border bg-popover text-popover-foreground shadow-lg overflow-hidden animate-in fade-in zoom-in-95">
-      <Command shouldFilter={true} className="border-none max-h-96">
-        <CommandInput placeholder="Type to filter..." value={query} className="hidden" />
+      <Command shouldFilter={false} className="border-none max-h-96">
         <CommandList className="max-h-[350px] overflow-y-auto thin-scroll">
           <CommandEmpty>No matching blocks.</CommandEmpty>
           
-          {SLASH_MENU_GROUPS.map((group) => (
+          {filteredGroups.map((group) => (
             <CommandGroup key={group.name} heading={group.name} className="px-1 py-2 text-muted-foreground">
-              {group.items.map((item) => (
+              {group.items.map((item) => {
+                const index = flatIndex++;
+                const selected = activeIndex === index;
+                return (
                 <CommandItem
                   key={item.id}
                   value={item.label}
                   onSelect={() => onSelect(item.type, item.id)}
-                  className="flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer aria-selected:bg-accent aria-selected:text-accent-foreground"
+                  className={`flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer aria-selected:bg-accent aria-selected:text-accent-foreground${selected ? " bg-accent text-accent-foreground" : ""}`}
                 >
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded border bg-background text-foreground/70 shadow-sm">
                     <item.icon className="h-5 w-5" />
@@ -150,7 +161,8 @@ export function SlashMenu({ onSelect, query = "" }: SlashMenuProps) {
                     )}
                   </div>
                 </CommandItem>
-              ))}
+                );
+              })}
             </CommandGroup>
           ))}
         </CommandList>
