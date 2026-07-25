@@ -15,6 +15,7 @@ import {
   LinkPageBlockView,
   VideoBlockView,
   FileBlockView,
+  CodeBlockView,
 } from "@/components/app/block-view";
 
 // this project's vitest config doesn't set `test.globals: true`, so RTL's auto-cleanup (which
@@ -516,5 +517,34 @@ describe("FileBlockView", () => {
       expect(onChange).toHaveBeenCalledWith({ url: "https://storage.example.com/files/notes.txt", name: "notes.txt", size: 42 })
     );
     expect(mockFetch).toHaveBeenCalledWith("/api/blocks/upload", expect.objectContaining({ method: "POST" }));
+  });
+});
+
+describe("CodeBlockView", () => {
+  it("renders a textarea and a language selector with default language", () => {
+    render(<CodeBlockView content={{ code: "", language: "text" }} onChange={() => {}} />);
+    expect(screen.getByPlaceholderText("Type code\u2026")).toBeInTheDocument();
+    const select = screen.getByRole("combobox");
+    expect(select).toHaveValue("text");
+  });
+
+  it("renders existing code content", () => {
+    render(<CodeBlockView content={{ code: "console.log('hello')", language: "javascript" }} onChange={() => {}} />);
+    expect(screen.getByPlaceholderText("Type code\u2026")).toHaveValue("console.log('hello')");
+    expect(screen.getByRole("combobox")).toHaveValue("javascript");
+  });
+
+  it("calls onChange when code is typed", () => {
+    const onChange = vi.fn();
+    render(<CodeBlockView content={{ code: "", language: "text" }} onChange={onChange} />);
+    fireEvent.change(screen.getByPlaceholderText("Type code\u2026"), { target: { value: "x = 1" } });
+    expect(onChange).toHaveBeenCalledWith({ code: "x = 1", language: "text" });
+  });
+
+  it("calls onChange when language is changed", () => {
+    const onChange = vi.fn();
+    render(<CodeBlockView content={{ code: "x = 1", language: "text" }} onChange={onChange} />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "python" } });
+    expect(onChange).toHaveBeenCalledWith({ code: "x = 1", language: "python" });
   });
 });
