@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowUp,
+  AtSign,
   Calendar,
   CalendarRange,
   ChevronDown,
@@ -38,6 +39,7 @@ import { ListView } from "@/components/app/list-view";
 import { TaskDetailDrawer } from "@/components/app/task-detail-drawer";
 import { cn, generateUUID, formatBytes } from "@/lib/utils";
 import { uploadBlockFile } from "@/lib/upload-block-file";
+import { WORKSPACES } from "@/lib/workspaces";
 import type {
   BlockContent,
   BlockContentUpdater,
@@ -52,6 +54,8 @@ import type {
   HeadingBlockContent,
   ImageBlockContent,
   LinkPageBlockContent,
+  MentionPageBlockContent,
+  MentionPersonBlockContent,
   NumberedBlockContent,
   PageBlockContent,
   QuoteBlockContent,
@@ -202,6 +206,12 @@ export function BlockView({
           <ChartBlockView content={block.content as ChartBlockContent} onChange={onChange} />
         )}
         {block.type === "toc" && <TocBlockView allBlocks={allBlocks ?? []} />}
+        {block.type === "mention_person" && (
+          <MentionPersonBlockView content={block.content as MentionPersonBlockContent} onChange={onChange} />
+        )}
+        {block.type === "mention_page" && (
+          <MentionPageBlockView content={block.content as MentionPageBlockContent} onChange={onChange} workspace={workspace} />
+        )}
       </div>
 
       <button
@@ -1390,5 +1400,48 @@ export function TocBlockView({ allBlocks }: { allBlocks: BlockDto[] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+export function MentionPersonBlockView({ content, onChange }: { content: MentionPersonBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const [open, setOpen] = React.useState(!content.personId);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger className="inline-flex items-center gap-1.5 rounded-full border bg-accent/50 px-2.5 py-1 text-xs font-medium cursor-pointer">
+        <AtSign className="h-3 w-3" /> {content.label || "Mention someone…"}
+      </PopoverTrigger>
+      <PopoverContent className="w-48 p-1">
+        {WORKSPACES.map((w) => (
+          <button key={w.id} onClick={() => { onChange({ personId: w.id, label: w.name }); setOpen(false); }} className="block w-full truncate rounded px-2 py-1.5 text-left text-sm hover:bg-accent cursor-pointer">
+            {w.name}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export function MentionPageBlockView({ content, onChange, workspace }: { content: MentionPageBlockContent; onChange: (c: BlockContentUpdater) => void; workspace?: string }) {
+  const [pages, setPages] = React.useState<{ id: string; title: string }[]>([]);
+  const [open, setOpen] = React.useState(!content.pageId);
+
+  React.useEffect(() => {
+    if (!workspace) return;
+    fetch(`/api/notes?ws=${workspace}`).then((r) => r.json()).then((d) => setPages(d.notes ?? []));
+  }, [workspace]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger className="inline-flex items-center gap-1.5 rounded-full border bg-accent/50 px-2.5 py-1 text-xs font-medium cursor-pointer">
+        <FileText className="h-3 w-3" /> {content.label || "Mention a page…"}
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-1">
+        {pages.map((p) => (
+          <button key={p.id} onClick={() => { onChange({ pageId: p.id, label: p.title || "Untitled" }); setOpen(false); }} className="block w-full truncate rounded px-2 py-1.5 text-left text-sm hover:bg-accent cursor-pointer">
+            {p.title || "Untitled"}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }
