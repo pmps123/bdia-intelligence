@@ -8,8 +8,8 @@ import { safeJson } from "@/lib/utils";
  * (counts, titles, recent items), never a full data dump.
  */
 export async function buildWorkspaceContext(workspace: string): Promise<string> {
-  const [notes, blocks, salesmanTotal, salesmanByBulan, projects] = await Promise.all([
-    prisma.note.findMany({ where: { workspace }, orderBy: { order: "asc" }, take: 20 }),
+  const [pages, blocks, salesmanTotal, salesmanByBulan, projects] = await Promise.all([
+    prisma.page.findMany({ where: { workspace }, orderBy: { order: "asc" }, take: 20 }),
     prisma.block.findMany({ where: { workspace }, orderBy: { order: "asc" }, take: 20 }),
     prisma.salesmanRow.count({ where: { workspace } }),
     prisma.salesmanRow.groupBy({ by: ["bulan"], where: { workspace }, _count: { _all: true } }),
@@ -18,20 +18,9 @@ export async function buildWorkspaceContext(workspace: string): Promise<string> 
 
   const sections: string[] = [];
 
-  if (notes.length > 0) {
-    const lines = notes.map((n) => {
-      const content = safeJson<Record<string, unknown>>(n.content, {});
-      const preview =
-        n.type === "text" || n.type === "heading"
-          ? String(content.text ?? "").slice(0, 120)
-          : n.type === "bullet"
-            ? `${(content.items as unknown[] | undefined)?.length ?? 0} item(s)`
-            : n.type === "table"
-              ? `${(content.rows as unknown[] | undefined)?.length ?? 0} row(s)`
-              : "";
-      return `- [${n.type}] ${n.title}${preview ? `: ${preview}` : ""}`;
-    });
-    sections.push(`Notes (${notes.length}):\n${lines.join("\n")}`);
+  if (pages.length > 0) {
+    const lines = pages.map((p) => `- ${p.title}`);
+    sections.push(`Pages (${pages.length}):\n${lines.join("\n")}`);
   }
 
   if (blocks.length > 0) {
