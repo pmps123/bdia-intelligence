@@ -8,6 +8,7 @@ import {
   CalendarRange,
   ChevronDown,
   ChevronRight,
+  File as FileIcon,
   FileText,
   GripVertical,
   Heading as HeadingIcon,
@@ -32,7 +33,7 @@ import { TimelineView } from "@/components/app/timeline-view";
 import { KanbanView } from "@/components/app/kanban-view";
 import { ListView } from "@/components/app/list-view";
 import { TaskDetailDrawer } from "@/components/app/task-detail-drawer";
-import { cn, generateUUID } from "@/lib/utils";
+import { cn, generateUUID, formatBytes } from "@/lib/utils";
 import { uploadBlockFile } from "@/lib/upload-block-file";
 import type {
   BlockContent,
@@ -41,6 +42,7 @@ import type {
   BlockType,
   BulletBlockContent,
   CalloutBlockContent,
+  FileBlockContent,
   HeadingBlockContent,
   ImageBlockContent,
   LinkPageBlockContent,
@@ -52,6 +54,7 @@ import type {
   TableViewDef,
   TextBlockContent,
   ToggleBlockContent,
+  VideoBlockContent,
 } from "@/lib/types";
 
 /** Notion-like "/" menu — offered from a text block, since it's already the block you're typing into. */
@@ -168,6 +171,12 @@ export function BlockView({
         )}
         {block.type === "link_page" && (
           <LinkPageBlockView content={block.content as LinkPageBlockContent} onChange={onChange} workspace={workspace} />
+        )}
+        {block.type === "video" && (
+          <VideoBlockView content={block.content as VideoBlockContent} onChange={onChange} />
+        )}
+        {block.type === "file" && (
+          <FileBlockView content={block.content as FileBlockContent} onChange={onChange} />
         )}
       </div>
 
@@ -1049,5 +1058,61 @@ export function LinkPageBlockView({ content, onChange, workspace }: { content: L
         ))}
       </PopoverContent>
     </Popover>
+  );
+}
+
+export function VideoBlockView({ content, onChange }: { content: VideoBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const fileRef = React.useRef<HTMLInputElement>(null);
+
+  const onFile = async (file: File) => {
+    try {
+      const d = await uploadBlockFile(file);
+      onChange({ ...content, url: d.url });
+    } catch {
+      // fail silently: upload error, old URL persists, user can retry or paste manually
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {content.url ? (
+        <video src={content.url} controls className="max-h-80 w-full rounded-lg border" />
+      ) : (
+        <div className="flex h-28 items-center justify-center rounded-lg border-2 border-dashed border-border/60 text-sm text-muted-foreground">No video yet</div>
+      )}
+      <div className="flex items-center gap-2">
+        <Input value={content.url} onChange={(e) => onChange({ ...content, url: e.target.value })} placeholder="Paste a video URL…" className="h-8 flex-1 text-xs" />
+        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => fileRef.current?.click()}>
+          <Upload className="h-3.5 w-3.5" /> Upload
+        </Button>
+        <input ref={fileRef} type="file" accept="video/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
+      </div>
+    </div>
+  );
+}
+
+export function FileBlockView({ content, onChange }: { content: FileBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const fileRef = React.useRef<HTMLInputElement>(null);
+
+  const onFile = async (file: File) => {
+    try {
+      const d = await uploadBlockFile(file);
+      onChange({ url: d.url, name: d.name, size: d.size });
+    } catch {
+      // fail silently: upload error, old URL persists, user can retry
+    }
+  };
+
+  return content.url ? (
+    <a href={content.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent">
+      <FileIcon className="h-4 w-4 text-muted-foreground" /> {content.name} <span className="text-xs text-muted-foreground">({formatBytes(content.size)})</span>
+    </a>
+  ) : (
+    <>
+      <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:text-primary cursor-pointer">
+        <Upload className="h-4 w-4" /> Upload a file
+      </button>
+      <input ref={fileRef} type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
+    </>
   );
 }
