@@ -706,12 +706,12 @@ export function ImageBlockView({ content, onChange }: { content: ImageBlockConte
   const fileRef = React.useRef<HTMLInputElement>(null);
 
   const onFile = async (file: File) => {
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch("/api/blocks/upload", { method: "POST", body: form });
-    if (!res.ok) return;
-    const d = await res.json();
-    onChange({ ...content, url: d.url });
+    try {
+      const d = await uploadBlockFile(file);
+      onChange({ ...content, url: d.url });
+    } catch {
+      // fail silently: upload error, old URL persists, user can retry or paste manually
+    }
   };
 
   return (
