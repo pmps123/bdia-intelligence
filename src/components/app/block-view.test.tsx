@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import * as React from "react";
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import type { BlockDto, NumberedBlockContent, NumberedItem, ToggleBlockContent } from "@/lib/types";
 import {
   HeadingBlockView,
@@ -11,6 +11,8 @@ import {
   CalloutBlockView,
   NumberedBlockView,
   ToggleBlockView,
+  PageBlockView,
+  LinkPageBlockView,
 } from "@/components/app/block-view";
 
 // this project's vitest config doesn't set `test.globals: true`, so RTL's auto-cleanup (which
@@ -310,5 +312,116 @@ describe("ToggleBlockView", () => {
       expect(label).not.toHaveClass("text-sm");
       unmount();
     }
+  });
+});
+
+describe("PageBlockView", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("shows a New sub-page button when content.pageId is empty, and never calls fetch", () => {
+    const mockFetch = vi.fn();
+    global.fetch = mockFetch;
+    render(<PageBlockView content={{ pageId: "" }} onChange={() => {}} workspace="rafli" />);
+
+    expect(screen.getByRole("button", { name: /new sub-page/i })).toBeInTheDocument();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("clicking New sub-page POSTs /api/notes with the workspace, then calls onChange with the returned page's id", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ note: { id: "new-page-1", workspace: "rafli", title: "Untitled" } }),
+    });
+    global.fetch = mockFetch;
+    const onChange = vi.fn();
+    render(<PageBlockView content={{ pageId: "" }} onChange={onChange} workspace="rafli" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /new sub-page/i }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ pageId: "new-page-1" }));
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toBe("/api/notes");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(options.body)).toEqual({ workspace: "rafli" });
+  });
+
+  it("once content.pageId is set, fetches /api/notes?ws=<workspace>, finds the matching page, and renders its title as a link", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        notes: [
+          { id: "other-page", title: "Not this one" },
+          { id: "page-42", title: "My Sub Page" },
+        ],
+      }),
+    });
+    global.fetch = mockFetch;
+    render(<PageBlockView content={{ pageId: "page-42" }} onChange={() => {}} workspace="rafli" />);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/notes?ws=rafli");
+
+    const link = await screen.findByRole("link", { name: /my sub page/i });
+    expect(link).toHaveAttribute("href", "/notes?id=page-42");
+    expect(screen.queryByRole("button", { name: /new sub-page/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("LinkPageBlockView", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("fetches /api/notes?ws=<workspace> on mount, and the popover lists the returned pages", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        notes: [
+          { id: "p1", title: "Page One" },
+          { id: "p2", title: "Page Two" },
+        ],
+      }),
+    });
+    global.fetch = mockFetch;
+    render(<LinkPageBlockView content={{ pageId: "" }} onChange={() => {}} workspace="rafli" />);
+
+    expect(mockFetch).toHaveBeenCalledWith("/api/notes?ws=rafli");
+
+    fireEvent.click(screen.getByRole("button", { name: /link to page/i }));
+
+    expect(await screen.findByRole("button", { name: "Page One" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Page Two" })).toBeInTheDocument();
+  });
+
+  it("selecting a page calls onChange with its id and closes the popover", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ notes: [{ id: "p1", title: "Page One" }] }),
+    });
+    global.fetch = mockFetch;
+    const onChange = vi.fn();
+    render(<LinkPageBlockView content={{ pageId: "" }} onChange={onChange} workspace="rafli" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /link to page/i }));
+    const option = await screen.findByRole("button", { name: "Page One" });
+    fireEvent.click(option);
+
+    expect(onChange).toHaveBeenCalledWith({ pageId: "p1" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Page One" })).not.toBeInTheDocument());
+  });
+
+  it("once content.pageId matches a fetched page, the trigger shows its title instead of the placeholder", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ notes: [{ id: "p1", title: "Selected Page" }] }),
+    });
+    global.fetch = mockFetch;
+    render(<LinkPageBlockView content={{ pageId: "p1" }} onChange={() => {}} workspace="rafli" />);
+
+    expect(await screen.findByRole("button", { name: /selected page/i })).toBeInTheDocument();
+    expect(screen.queryByText("Link to page…")).not.toBeInTheDocument();
   });
 });

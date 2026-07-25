@@ -1,15 +1,18 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import {
   ArrowDown,
   ArrowUp,
   CalendarRange,
   ChevronDown,
   ChevronRight,
+  FileText,
   GripVertical,
   Heading as HeadingIcon,
   Image as ImageIcon,
+  Link2 as Link2Icon,
   ListChecks,
   Plus,
   Table2,
@@ -40,7 +43,9 @@ import type {
   CalloutBlockContent,
   HeadingBlockContent,
   ImageBlockContent,
+  LinkPageBlockContent,
   NumberedBlockContent,
+  PageBlockContent,
   QuoteBlockContent,
   SubTableDef,
   TableBlockContent,
@@ -69,6 +74,7 @@ export function BlockView({
   registerFocus,
   isFirst,
   isLast,
+  workspace,
 }: {
   block: BlockDto;
   onChange: (content: BlockContentUpdater) => void;
@@ -84,6 +90,8 @@ export function BlockView({
   registerFocus?: (handle: { focus: () => void } | null) => void;
   isFirst: boolean;
   isLast: boolean;
+  /** Current page's workspace — Page/Link-to-page blocks need it to create/list sibling pages. */
+  workspace?: string;
 }) {
   return (
     <div className="group relative flex gap-1.5">
@@ -151,6 +159,12 @@ export function BlockView({
         )}
         {block.type === "callout" && (
           <CalloutBlockView content={block.content as CalloutBlockContent} onChange={onChange} />
+        )}
+        {block.type === "page" && (
+          <PageBlockView content={block.content as PageBlockContent} onChange={onChange} workspace={workspace} />
+        )}
+        {block.type === "link_page" && (
+          <LinkPageBlockView content={block.content as LinkPageBlockContent} onChange={onChange} workspace={workspace} />
         )}
       </div>
 
@@ -968,5 +982,69 @@ export function ImageBlockView({ content, onChange }: { content: ImageBlockConte
         className="h-7 border-0 bg-transparent px-1 text-xs text-muted-foreground shadow-none focus-visible:ring-1"
       />
     </div>
+  );
+}
+
+export function PageBlockView({ content, onChange, workspace }: { content: PageBlockContent; onChange: (c: BlockContentUpdater) => void; workspace?: string }) {
+  const [title, setTitle] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!content.pageId || !workspace) return;
+    fetch(`/api/notes?ws=${workspace}`).then((r) => r.json()).then((d) => {
+      const page = (d.notes ?? []).find((n: { id: string }) => n.id === content.pageId);
+      setTitle(page?.title ?? "Untitled");
+    });
+  }, [content.pageId, workspace]);
+
+  const createSubPage = async () => {
+    if (!workspace) return;
+    const res = await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace }),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+    onChange({ pageId: d.note.id });
+  };
+
+  if (!content.pageId) {
+    return (
+      <button onClick={createSubPage} className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:text-primary cursor-pointer">
+        <FileText className="h-4 w-4" /> New sub-page
+      </button>
+    );
+  }
+  return (
+    <Link href={`/notes?id=${content.pageId}`} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent">
+      <FileText className="h-4 w-4 text-muted-foreground" /> {title ?? "Loading…"}
+    </Link>
+  );
+}
+
+export function LinkPageBlockView({ content, onChange, workspace }: { content: LinkPageBlockContent; onChange: (c: BlockContentUpdater) => void; workspace?: string }) {
+  const [pages, setPages] = React.useState<{ id: string; title: string }[]>([]);
+  const [open, setOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!workspace) return;
+    fetch(`/api/notes?ws=${workspace}`).then((r) => r.json()).then((d) => setPages(d.notes ?? []));
+  }, [workspace]);
+
+  const selected = pages.find((p) => p.id === content.pageId);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent cursor-pointer">
+        <Link2Icon className="h-4 w-4 text-muted-foreground" /> {selected ? selected.title : "Link to page…"}
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-1">
+        {pages.map((p) => (
+          <button key={p.id} onClick={() => { onChange({ pageId: p.id }); setOpen(false); }} className="block w-full truncate rounded px-2 py-1.5 text-left text-sm hover:bg-accent cursor-pointer">
+            {p.title || "Untitled"}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }

@@ -235,6 +235,7 @@ export function NoteEditor({
                 }}
                 isFirst={i === 0}
                 isLast={i === blocks.length - 1}
+                workspace={note?.workspace}
               />
             ))}
           </div>
