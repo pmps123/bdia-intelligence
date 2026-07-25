@@ -45,7 +45,9 @@ import type {
   BlockType,
   BulletBlockContent,
   CalloutBlockContent,
+  ChartBlockContent,
   CodeBlockContent,
+  ColumnsBlockContent,
   FileBlockContent,
   HeadingBlockContent,
   ImageBlockContent,
@@ -189,6 +191,9 @@ export function BlockView({
         )}
         {block.type === "code" && (
           <CodeBlockView content={block.content as CodeBlockContent} onChange={onChange} />
+        )}
+        {block.type === "columns" && (
+          <ColumnsBlockView content={block.content as ColumnsBlockContent} onChange={onChange} />
         )}
       </div>
 
@@ -1252,6 +1257,61 @@ export function CodeBlockView({ content, onChange }: { content: CodeBlockContent
         rows={4}
         className="resize-y border-0 bg-transparent px-3 py-2 font-mono text-xs shadow-none focus-visible:ring-0"
       />
+    </div>
+  );
+}
+
+export function ColumnsBlockView({ content, onChange }: { content: ColumnsBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const addToColumn = (colIndex: number) => {
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const child: BlockDto = { id: generateUUID(), workspace: "", order: p.columns[colIndex].length, type: "text", content: { text: "" } };
+      const columns = p.columns.map((col, i) => (i === colIndex ? [...col, child] : col));
+      return { ...p, columns };
+    });
+  };
+
+  const updateChild = (colIndex: number, childIndex: number, next: BlockContentUpdater) => {
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const col = p.columns[colIndex];
+      const child = col[childIndex];
+      const resolved = typeof next === "function" ? next(child.content) : next;
+      const newCol = col.map((c, i) => (i === childIndex ? { ...c, content: resolved } : c));
+      const columns = p.columns.map((c, i) => (i === colIndex ? newCol : c));
+      return { ...p, columns };
+    });
+  };
+
+  const removeChild = (colIndex: number, childIndex: number) => {
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const columns = p.columns.map((c, i) => (i === colIndex ? c.filter((_, ci) => ci !== childIndex) : c));
+      return { ...p, columns };
+    });
+  };
+
+  return (
+    <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${content.columnCount}, minmax(0, 1fr))` }}>
+      {content.columns.map((col, colIndex) => (
+        <div key={colIndex} className="space-y-1 border-l pl-3 first:border-l-0 first:pl-0">
+          {col.map((child, childIndex) => (
+            <BlockView
+              key={child.id}
+              block={child}
+              onChange={(c) => updateChild(colIndex, childIndex, c)}
+              onDelete={() => removeChild(colIndex, childIndex)}
+              onMoveUp={() => {}}
+              onMoveDown={() => {}}
+              isFirst
+              isLast
+            />
+          ))}
+          <button onClick={() => addToColumn(colIndex)} className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer">
+            <Plus className="h-3.5 w-3.5" /> Add
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
