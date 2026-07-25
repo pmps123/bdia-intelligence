@@ -35,7 +35,10 @@ import type {
   BlockDto,
   BlockType,
   BulletBlockContent,
+  CalloutBlockContent,
+  HeadingBlockContent,
   ImageBlockContent,
+  QuoteBlockContent,
   SubTableDef,
   TableBlockContent,
   TableViewDef,
@@ -113,7 +116,7 @@ export function BlockView({
         )}
         {block.type === "heading" && (
           <HeadingBlockView
-            content={block.content as TextBlockContent}
+            content={block.content as HeadingBlockContent}
             onChange={onChange}
             onEnter={onEnter}
             onBackspaceEmpty={onBackspaceEmpty}
@@ -128,6 +131,13 @@ export function BlockView({
         )}
         {block.type === "image" && (
           <ImageBlockView content={block.content as ImageBlockContent} onChange={onChange} />
+        )}
+        {block.type === "divider" && <DividerBlockView />}
+        {block.type === "quote" && (
+          <QuoteBlockView content={block.content as QuoteBlockContent} onChange={onChange} />
+        )}
+        {block.type === "callout" && (
+          <CalloutBlockView content={block.content as CalloutBlockContent} onChange={onChange} />
         )}
       </div>
 
@@ -244,6 +254,13 @@ export function TextBlockView({
   );
 }
 
+const HEADING_SIZE: Record<1 | 2 | 3 | 4, string> = {
+  1: "text-2xl",
+  2: "text-xl",
+  3: "text-lg",
+  4: "text-base",
+};
+
 export function HeadingBlockView({
   content,
   onChange,
@@ -251,15 +268,13 @@ export function HeadingBlockView({
   onBackspaceEmpty,
   registerFocus,
 }: {
-  content: TextBlockContent;
+  content: HeadingBlockContent;
   onChange: (c: BlockContentUpdater) => void;
   onEnter?: () => void;
   onBackspaceEmpty?: () => void;
   registerFocus?: (handle: { focus: () => void } | null) => void;
 }) {
   const ref = React.useRef<HTMLInputElement>(null);
-  // see TextBlockView: must be a layout effect so registration wins the race against the
-  // parent's own layout effect trying to focus this block right after it mounts.
   React.useLayoutEffect(() => {
     registerFocus?.({ focus: () => ref.current?.focus() });
     return () => registerFocus?.(null);
@@ -269,7 +284,7 @@ export function HeadingBlockView({
     <Input
       ref={ref}
       value={content.text}
-      onChange={(e) => onChange({ text: e.target.value })}
+      onChange={(e) => onChange({ ...content, text: e.target.value })}
       onKeyDown={(e) => {
         if (e.key === "Enter" && onEnter) {
           e.preventDefault();
@@ -280,8 +295,50 @@ export function HeadingBlockView({
         }
       }}
       placeholder="Heading"
-      className="h-auto border-0 bg-transparent px-1 py-1 font-display text-lg font-semibold shadow-none focus-visible:ring-1"
+      className={cn("h-auto border-0 bg-transparent px-1 py-1 font-display font-semibold shadow-none focus-visible:ring-1", HEADING_SIZE[content.level ?? 1])}
     />
+  );
+}
+
+export function DividerBlockView() {
+  return <hr className="my-2 border-border" />;
+}
+
+export function QuoteBlockView({ content, onChange }: { content: QuoteBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  return (
+    <Textarea
+      value={content.text}
+      onChange={(e) => onChange({ text: e.target.value })}
+      placeholder="Quote"
+      rows={1}
+      className="min-h-0 resize-none border-l-2 border-primary/50 bg-transparent px-3 py-1 text-sm italic shadow-none focus-visible:ring-1"
+    />
+  );
+}
+
+const CALLOUT_ICONS = ["💡", "⚠️", "📌", "✅", "❗"];
+
+export function CalloutBlockView({ content, onChange }: { content: CalloutBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border bg-accent/40 p-3">
+      <Popover>
+        <PopoverTrigger className="shrink-0 text-lg cursor-pointer">{content.icon}</PopoverTrigger>
+        <PopoverContent className="flex w-auto gap-1 p-1.5">
+          {CALLOUT_ICONS.map((icon) => (
+            <button key={icon} onClick={() => onChange({ ...content, icon })} className="rounded p-1 text-lg hover:bg-accent cursor-pointer">
+              {icon}
+            </button>
+          ))}
+        </PopoverContent>
+      </Popover>
+      <Textarea
+        value={content.text}
+        onChange={(e) => onChange({ ...content, text: e.target.value })}
+        placeholder="Callout text"
+        rows={1}
+        className="min-h-0 flex-1 resize-none border-0 bg-transparent px-0 py-0.5 text-sm shadow-none focus-visible:ring-0"
+      />
+    </div>
   );
 }
 
