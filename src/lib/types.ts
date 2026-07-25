@@ -123,7 +123,14 @@ export interface ExportColumnConfig {
 
 /* ---------- Notion-like blocks (workspace page, notes) ---------- */
 
-export type BlockType = "text" | "heading" | "bullet" | "table" | "image";
+export type BlockType =
+  | "text" | "heading" | "bullet" | "table" | "image"
+  | "numbered" | "todo" | "toggle"
+  | "page" | "callout" | "quote" | "divider" | "link_page"
+  | "video" | "file" | "code"
+  | "database_view"
+  | "chart" | "toc" | "columns"
+  | "mention_person" | "mention_page";
 
 export interface TextBlockContent {
   text: string;
@@ -194,11 +201,109 @@ export interface TableBlockContent {
   activeTableId?: string;
 }
 
+export interface HeadingBlockContent {
+  text: string;
+  level: 1 | 2 | 3 | 4;
+}
+
+export interface NumberedItem {
+  id: string;
+  text: string;
+}
+
+export interface NumberedBlockContent {
+  items: NumberedItem[];
+}
+
+export interface ToggleBlockContent {
+  text: string;
+  /** Present only for a "Toggle Heading" — plain Toggle List omits it. */
+  level?: 1 | 2 | 3;
+  children: BlockDto[];
+}
+
+export interface PageBlockContent {
+  pageId: string;
+}
+
+export interface CalloutBlockContent {
+  text: string;
+  icon: string;
+}
+
+export interface QuoteBlockContent {
+  text: string;
+}
+
+export type DividerBlockContent = Record<string, never>;
+
+export interface LinkPageBlockContent {
+  pageId: string;
+}
+
+export interface VideoBlockContent {
+  url: string;
+  caption: string;
+}
+
+export interface FileBlockContent {
+  url: string;
+  name: string;
+  size: number;
+}
+
+export interface CodeBlockContent {
+  code: string;
+  language: string;
+}
+
+export interface ChartBlockContent {
+  chartType: "bar" | "line" | "pie";
+  data: { label: string; value: number }[];
+}
+
+export type TocBlockContent = Record<string, never>;
+
+export interface ColumnsBlockContent {
+  columnCount: 2 | 3 | 4;
+  columns: BlockDto[][];
+}
+
+export interface MentionPersonBlockContent {
+  personId: string;
+  label: string;
+}
+
+export interface MentionPageBlockContent {
+  pageId: string;
+  label: string;
+}
+
 /** A block's onChange either replaces content outright, or (safer when a single interaction can
  *  fire more than one update in the same tick) resolves against the truly-latest content. */
 export type BlockContentUpdater = BlockContent | ((prev: BlockContent) => BlockContent);
 
-export type BlockContent = TextBlockContent | BulletBlockContent | TableBlockContent | ImageBlockContent;
+export type BlockContent =
+  | TextBlockContent
+  | HeadingBlockContent
+  | BulletBlockContent
+  | NumberedBlockContent
+  | ToggleBlockContent
+  | TableBlockContent
+  | ImageBlockContent
+  | PageBlockContent
+  | CalloutBlockContent
+  | QuoteBlockContent
+  | DividerBlockContent
+  | LinkPageBlockContent
+  | VideoBlockContent
+  | FileBlockContent
+  | CodeBlockContent
+  | ChartBlockContent
+  | TocBlockContent
+  | ColumnsBlockContent
+  | MentionPersonBlockContent
+  | MentionPageBlockContent;
 
 export interface BlockDto {
   id: string;
@@ -209,10 +314,50 @@ export interface BlockDto {
 }
 
 export const emptyBlockContent = (type: BlockType): BlockContent => {
-  if (type === "bullet") return { items: [] };
-  if (type === "table") return { columns: [{ id: generateUUID(), name: "Column 1" }], rows: [] };
-  if (type === "image") return { url: "", caption: "" };
-  return { text: "" };
+  switch (type) {
+    case "bullet":
+    case "todo":
+      return { items: [] };
+    case "numbered":
+      return { items: [] };
+    case "toggle":
+      return { text: "", children: [] };
+    case "table":
+    case "database_view":
+      return { columns: [{ id: generateUUID(), name: "Column 1" }], rows: [] };
+    case "image":
+      return { url: "", caption: "" };
+    case "video":
+      return { url: "", caption: "" };
+    case "file":
+      return { url: "", name: "", size: 0 };
+    case "code":
+      return { code: "", language: "text" };
+    case "callout":
+      return { text: "", icon: "💡" };
+    case "quote":
+      return { text: "" };
+    case "divider":
+      return {};
+    case "toc":
+      return {};
+    case "page":
+      return { pageId: "" };
+    case "link_page":
+      return { pageId: "" };
+    case "chart":
+      return { chartType: "bar", data: [] };
+    case "columns":
+      return { columnCount: 2, columns: [[], []] };
+    case "mention_person":
+      return { personId: "", label: "" };
+    case "mention_page":
+      return { pageId: "", label: "" };
+    case "heading":
+      return { text: "", level: 1 };
+    default:
+      return { text: "" };
+  }
 };
 
 /* ---------- Notes (per-workspace, freeform) — same block shapes as the workspace page ---------- */

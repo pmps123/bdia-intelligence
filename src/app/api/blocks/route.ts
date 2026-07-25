@@ -3,7 +3,15 @@ import { prisma } from "@/lib/db";
 import { safeJson } from "@/lib/utils";
 import { emptyBlockContent, type BlockType } from "@/lib/types";
 
-const BLOCK_TYPES: BlockType[] = ["text", "heading", "bullet", "table", "image"];
+const BLOCK_TYPES: BlockType[] = [
+  "text", "heading", "bullet", "table", "image",
+  "numbered", "todo", "toggle",
+  "page", "callout", "quote", "divider", "link_page",
+  "video", "file", "code",
+  "database_view",
+  "chart", "toc", "columns",
+  "mention_person", "mention_page",
+];
 
 export async function GET(req: NextRequest) {
   const pageId = req.nextUrl.searchParams.get("pageId");
