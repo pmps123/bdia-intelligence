@@ -13,6 +13,9 @@ import {
   ToggleBlockView,
   PageBlockView,
   LinkPageBlockView,
+  VideoBlockView,
+  FileBlockView,
+  CodeBlockView,
 } from "@/components/app/block-view";
 
 // this project's vitest config doesn't set `test.globals: true`, so RTL's auto-cleanup (which
@@ -425,5 +428,123 @@ describe("LinkPageBlockView", () => {
 
     expect(await screen.findByRole("button", { name: /selected page/i })).toBeInTheDocument();
     expect(screen.queryByText("Link to page…")).not.toBeInTheDocument();
+  });
+});
+
+describe("VideoBlockView", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders a placeholder when there's no url", () => {
+    render(<VideoBlockView content={{ url: "", caption: "" }} onChange={() => {}} />);
+    expect(screen.getByText("No video yet")).toBeInTheDocument();
+    expect(document.querySelector("video")).not.toBeInTheDocument();
+  });
+
+  it("renders a <video> element with the url once set", () => {
+    render(<VideoBlockView content={{ url: "https://example.com/clip.mp4", caption: "" }} onChange={() => {}} />);
+    const video = document.querySelector("video");
+    expect(video).toBeInTheDocument();
+    expect(video).toHaveAttribute("src", "https://example.com/clip.mp4");
+    expect(screen.queryByText("No video yet")).not.toBeInTheDocument();
+  });
+
+  it("typing a URL directly calls onChange, without touching fetch", () => {
+    const mockFetch = vi.fn();
+    global.fetch = mockFetch;
+    const onChange = vi.fn();
+    render(<VideoBlockView content={{ url: "", caption: "" }} onChange={onChange} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Paste a video URL…"), { target: { value: "https://youtu.be/abc123" } });
+
+    expect(onChange).toHaveBeenCalledWith({ url: "https://youtu.be/abc123", caption: "" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("clicking Upload and selecting a file uploads it and calls onChange with the resulting url", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ url: "https://storage.example.com/videos/clip.mp4", name: "clip.mp4", size: 1234 }),
+    });
+    global.fetch = mockFetch;
+    const onChange = vi.fn();
+    const { container } = render(<VideoBlockView content={{ url: "", caption: "" }} onChange={onChange} />);
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["binary-video-bytes"], "clip.mp4", { type: "video/mp4" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ url: "https://storage.example.com/videos/clip.mp4", caption: "" }));
+    expect(mockFetch).toHaveBeenCalledWith("/api/blocks/upload", expect.objectContaining({ method: "POST" }));
+  });
+});
+
+describe("FileBlockView", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders an upload prompt when there's no url", () => {
+    render(<FileBlockView content={{ url: "", name: "", size: 0 }} onChange={() => {}} />);
+    expect(screen.getByRole("button", { name: /upload a file/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("renders a download link with name and size once url is set", () => {
+    render(<FileBlockView content={{ url: "https://storage.example.com/files/report.pdf", name: "report.pdf", size: 2048 }} onChange={() => {}} />);
+    const link = screen.getByRole("link");
+    expect(link).toHaveAttribute("href", "https://storage.example.com/files/report.pdf");
+    expect(link).toHaveTextContent("report.pdf");
+    expect(link).toHaveTextContent("(2.0 KB)");
+    expect(screen.queryByRole("button", { name: /upload a file/i })).not.toBeInTheDocument();
+  });
+
+  it("upload flow calls onChange with {url, name, size} from the upload response", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ url: "https://storage.example.com/files/notes.txt", name: "notes.txt", size: 42 }),
+    });
+    global.fetch = mockFetch;
+    const onChange = vi.fn();
+    const { container } = render(<FileBlockView content={{ url: "", name: "", size: 0 }} onChange={onChange} />);
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith({ url: "https://storage.example.com/files/notes.txt", name: "notes.txt", size: 42 })
+    );
+    expect(mockFetch).toHaveBeenCalledWith("/api/blocks/upload", expect.objectContaining({ method: "POST" }));
+  });
+});
+
+describe("CodeBlockView", () => {
+  it("renders a textarea and a language selector with default language", () => {
+    render(<CodeBlockView content={{ code: "", language: "text" }} onChange={() => {}} />);
+    expect(screen.getByPlaceholderText("Type code\u2026")).toBeInTheDocument();
+    const select = screen.getByRole("combobox");
+    expect(select).toHaveValue("text");
+  });
+
+  it("renders existing code content", () => {
+    render(<CodeBlockView content={{ code: "console.log('hello')", language: "javascript" }} onChange={() => {}} />);
+    expect(screen.getByPlaceholderText("Type code\u2026")).toHaveValue("console.log('hello')");
+    expect(screen.getByRole("combobox")).toHaveValue("javascript");
+  });
+
+  it("calls onChange when code is typed", () => {
+    const onChange = vi.fn();
+    render(<CodeBlockView content={{ code: "", language: "text" }} onChange={onChange} />);
+    fireEvent.change(screen.getByPlaceholderText("Type code\u2026"), { target: { value: "x = 1" } });
+    expect(onChange).toHaveBeenCalledWith({ code: "x = 1", language: "text" });
+  });
+
+  it("calls onChange when language is changed", () => {
+    const onChange = vi.fn();
+    render(<CodeBlockView content={{ code: "x = 1", language: "text" }} onChange={onChange} />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "python" } });
+    expect(onChange).toHaveBeenCalledWith({ code: "x = 1", language: "python" });
   });
 });

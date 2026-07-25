@@ -38,6 +38,7 @@
     "pdf-parse": "^1.1.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "recharts": "^3.10.1",
     "sharp": "^0.35.3",
     "sonner": "^2.0.3",
     "tailwind-merge": "^3.2.0",

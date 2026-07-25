@@ -141,6 +141,16 @@ export interface ImageBlockContent {
   caption: string;
 }
 
+export interface ColumnsBlockContent {
+  columnCount: number;
+  columns: BlockDto[][];
+}
+
+export interface ChartBlockContent {
+  chartType: "bar" | "line" | "pie";
+  data: { name: string; value: number }[];
+}
+
 export interface BulletItem {
   id: string;
   text: string;
@@ -175,7 +185,7 @@ export interface TableRowDef {
 export interface TableViewDef {
   id: string;
   name: string;
-  type: "table" | "timeline" | "board" | "list";
+  type: "table" | "timeline" | "board" | "list" | "gallery" | "dashboard" | "calendar";
   /** Timeline only: which "date" columns a row's bar spans. A single-date column can fill both. */
   startColumnId?: string;
   endColumnId?: string;

@@ -5,13 +5,17 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowUp,
+  Calendar,
   CalendarRange,
   ChevronDown,
   ChevronRight,
+  File as FileIcon,
   FileText,
   GripVertical,
   Heading as HeadingIcon,
   Image as ImageIcon,
+  LayoutDashboard,
+  LayoutGrid,
   Link2 as Link2Icon,
   ListChecks,
   Plus,
@@ -21,7 +25,11 @@ import {
   X,
   Kanban as KanbanIcon,
   List as ListIcon,
+  PieChart as PieChartIcon,
+  BarChart3,
+  LineChart as LineChartIcon,
 } from "lucide-react";
+import { BarChart, Bar, PieChart, Pie, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -32,7 +40,7 @@ import { TimelineView } from "@/components/app/timeline-view";
 import { KanbanView } from "@/components/app/kanban-view";
 import { ListView } from "@/components/app/list-view";
 import { TaskDetailDrawer } from "@/components/app/task-detail-drawer";
-import { cn, generateUUID } from "@/lib/utils";
+import { cn, formatBytes, generateUUID } from "@/lib/utils";
 import { uploadBlockFile } from "@/lib/upload-block-file";
 import type {
   BlockContent,
@@ -41,6 +49,10 @@ import type {
   BlockType,
   BulletBlockContent,
   CalloutBlockContent,
+  ChartBlockContent,
+  CodeBlockContent,
+  ColumnsBlockContent,
+  FileBlockContent,
   HeadingBlockContent,
   ImageBlockContent,
   LinkPageBlockContent,
@@ -49,9 +61,12 @@ import type {
   QuoteBlockContent,
   SubTableDef,
   TableBlockContent,
+  TableColumnDef,
+  TableRowDef,
   TableViewDef,
   TextBlockContent,
   ToggleBlockContent,
+  VideoBlockContent,
 } from "@/lib/types";
 
 /** Notion-like "/" menu — offered from a text block, since it's already the block you're typing into. */
@@ -147,11 +162,17 @@ export function BlockView({
         {block.type === "todo" && (
           <BulletBlockView content={block.content as BulletBlockContent} onChange={onChange} onEmptyBackspaceOnly={onBackspaceEmpty} />
         )}
-        {block.type === "table" && (
+        {(block.type === "table" || block.type === "database_view") && (
           <TableBlockView content={block.content as TableBlockContent} onChange={onChange} />
         )}
         {block.type === "toggle" && (
           <ToggleBlockView content={block.content as ToggleBlockContent} onChange={onChange} />
+        )}
+        {block.type === "columns" && (
+          <ColumnsBlockView content={block.content as ColumnsBlockContent} onChange={onChange} />
+        )}
+        {block.type === "chart" && (
+          <ChartBlockView content={block.content as ChartBlockContent} onChange={onChange} />
         )}
         {block.type === "image" && (
           <ImageBlockView content={block.content as ImageBlockContent} onChange={onChange} />
@@ -168,6 +189,15 @@ export function BlockView({
         )}
         {block.type === "link_page" && (
           <LinkPageBlockView content={block.content as LinkPageBlockContent} onChange={onChange} workspace={workspace} />
+        )}
+        {block.type === "video" && (
+          <VideoBlockView content={block.content as VideoBlockContent} onChange={onChange} />
+        )}
+        {block.type === "file" && (
+          <FileBlockView content={block.content as FileBlockContent} onChange={onChange} />
+        )}
+        {block.type === "code" && (
+          <CodeBlockView content={block.content as CodeBlockContent} onChange={onChange} />
         )}
       </div>
 
@@ -631,6 +661,7 @@ function AddViewMenu({
   const [startId, setStartId] = React.useState("");
   const [endId, setEndId] = React.useState("");
   const [groupById, setGroupById] = React.useState("");
+  const [pendingCalendar, setPendingCalendar] = React.useState(false);
 
   const openTimelinePicker = () => {
     setStartId(dateColumns[0]?.id ?? "");
@@ -645,6 +676,7 @@ function AddViewMenu({
 
   const reset = () => {
     setStep("main");
+    setPendingCalendar(false);
     setOpen(false);
   };
 
@@ -678,12 +710,32 @@ function AddViewMenu({
               <KanbanIcon className="h-4 w-4" /> Board
             </button>
             <button
+              onClick={() => { onAdd({ id: generateUUID(), name: "Gallery", type: "gallery" }); reset(); }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+            >
+              <LayoutGrid className="h-4 w-4" /> Gallery
+            </button>
+            <button
+              onClick={() => { onAdd({ id: generateUUID(), name: "Dashboard", type: "dashboard" }); reset(); }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+            >
+              <LayoutDashboard className="h-4 w-4" /> Dashboard
+            </button>
+            <button
               onClick={openTimelinePicker}
               disabled={dateColumns.length === 0}
               title={dateColumns.length === 0 ? "Add a Date column first" : undefined}
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
             >
               <CalendarRange className="h-4 w-4" /> Timeline
+            </button>
+            <button
+              onClick={() => { setPendingCalendar(true); openTimelinePicker(); }}
+              disabled={dateColumns.length === 0}
+              title={dateColumns.length === 0 ? "Add a Date column first" : undefined}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+            >
+              <Calendar className="h-4 w-4" /> Calendar
             </button>
           </div>
         ) : step === "board" ? (
@@ -719,20 +771,30 @@ function AddViewMenu({
                 ))}
               </select>
             </label>
-            <label className="block text-xs">
-              End
-              <select value={endId} onChange={(e) => setEndId(e.target.value)} className="mt-0.5 h-7 w-full rounded border bg-transparent px-1.5 text-sm">
-                {dateColumns.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </label>
+            {pendingCalendar ? null : (
+              <label className="block text-xs">
+                End
+                <select value={endId} onChange={(e) => setEndId(e.target.value)} className="mt-0.5 h-7 w-full rounded border bg-transparent px-1.5 text-sm">
+                  {dateColumns.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <Button
               size="sm"
               className="h-7 w-full text-xs"
-              onClick={() => { onAdd({ id: generateUUID(), name: "Timeline", type: "timeline", startColumnId: startId, endColumnId: endId }); reset(); }}
+              onClick={() => {
+                if (pendingCalendar) {
+                  onAdd({ id: generateUUID(), name: "Calendar", type: "calendar", startColumnId: startId });
+                  setPendingCalendar(false);
+                } else {
+                  onAdd({ id: generateUUID(), name: "Timeline", type: "timeline", startColumnId: startId, endColumnId: endId });
+                }
+                reset();
+              }}
             >
-              Create timeline view
+              {pendingCalendar ? "Create calendar view" : "Create timeline view"}
             </Button>
           </div>
         )}
@@ -748,6 +810,68 @@ function AddViewMenu({
 function tablesFromContent(c: TableBlockContent): SubTableDef[] {
   if (c.tables && c.tables.length > 0) return c.tables;
   return [{ id: "default", name: "Table 1", columns: c.columns?.length ? c.columns : [{ id: generateUUID(), name: "Column 1" }], rows: c.rows ?? [] }];
+}
+
+export function GalleryView({ columns, rows }: { columns: TableColumnDef[]; rows: TableRowDef[] }) {
+  const titleCol = columns[0];
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {rows.map((row) => (
+        <div key={row.id} className="rounded-lg border p-3">
+          <div className="truncate text-sm font-medium">{row.cells[titleCol?.id] || "Untitled"}</div>
+          {columns.slice(1, 4).map((c) => (
+            <div key={c.id} className="mt-1 truncate text-xs text-muted-foreground">{c.name}: {row.cells[c.id] || "—"}</div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function DashboardView({ columns, rows }: { columns: TableColumnDef[]; rows: TableRowDef[] }) {
+  const numericCols = columns.filter((c) => c.type === "number");
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="rounded-lg border p-3">
+        <div className="text-xs text-muted-foreground">Total rows</div>
+        <div className="mt-1 font-display text-xl font-semibold">{rows.length}</div>
+      </div>
+      {numericCols.map((c) => {
+        const sum = rows.reduce((s, r) => s + (Number(r.cells[c.id]) || 0), 0);
+        return (
+          <div key={c.id} className="rounded-lg border p-3">
+            <div className="text-xs text-muted-foreground">{c.name} (sum)</div>
+            <div className="mt-1 font-display text-xl font-semibold">{sum}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function CalendarView({ columns, rows, dateColumnId }: { columns: TableColumnDef[]; rows: TableRowDef[]; dateColumnId?: string }) {
+  const titleCol = columns[0];
+  if (!dateColumnId) return <div className="p-3 text-sm text-muted-foreground">Add a Date column to use Calendar view.</div>;
+  const byDate = new Map<string, TableRowDef[]>();
+  for (const row of rows) {
+    const d = row.cells[dateColumnId];
+    if (!d) continue;
+    byDate.set(d, [...(byDate.get(d) ?? []), row]);
+  }
+  const dates = [...byDate.keys()].sort();
+  return (
+    <div className="space-y-2">
+      {dates.length === 0 && <div className="p-3 text-sm text-muted-foreground">No dated rows yet.</div>}
+      {dates.map((d) => (
+        <div key={d} className="rounded-lg border p-2">
+          <div className="text-xs font-semibold text-muted-foreground">{d}</div>
+          {byDate.get(d)!.map((row) => (
+            <div key={row.id} className="truncate text-sm">{row.cells[titleCol?.id] || "Untitled"}</div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function TableBlockView({ content, onChange }: { content: TableBlockContent; onChange: (c: BlockContentUpdater) => void }) {
@@ -885,6 +1009,12 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
           endColumnId={activeView.endColumnId}
           onChangeRows={(rows) => patchActiveTable({ rows })}
         />
+      ) : activeView.type === "gallery" ? (
+        <GalleryView columns={activeTable.columns} rows={activeTable.rows} />
+      ) : activeView.type === "dashboard" ? (
+        <DashboardView columns={activeTable.columns} rows={activeTable.rows} />
+      ) : activeView.type === "calendar" ? (
+        <CalendarView columns={activeTable.columns} rows={activeTable.rows} dateColumnId={activeView.startColumnId} />
       ) : activeView.type === "board" ? (
         <KanbanView
           columns={activeTable.columns}
@@ -988,6 +1118,108 @@ export function ImageBlockView({ content, onChange }: { content: ImageBlockConte
   );
 }
 
+export function VideoBlockView({ content, onChange }: { content: VideoBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const fileRef = React.useRef<HTMLInputElement>(null);
+
+  const onFile = async (file: File) => {
+    try {
+      const d = await uploadBlockFile(file);
+      onChange({ ...content, url: d.url });
+    } catch {
+      // fail silently: upload error, old URL persists, user can retry or paste manually
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {content.url ? (
+        <video src={content.url} controls className="max-h-80 w-full rounded-lg border" />
+      ) : (
+        <div className="flex h-28 items-center justify-center rounded-lg border-2 border-dashed border-border/60 text-sm text-muted-foreground">No video yet</div>
+      )}
+      <div className="flex items-center gap-2">
+        <Input value={content.url} onChange={(e) => onChange({ ...content, url: e.target.value })} placeholder="Paste a video URL…" className="h-8 flex-1 text-xs" />
+        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => fileRef.current?.click()}>
+          <Upload className="h-3.5 w-3.5" /> Upload
+        </Button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="video/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onFile(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function FileBlockView({ content, onChange }: { content: FileBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const fileRef = React.useRef<HTMLInputElement>(null);
+
+  const onFile = async (file: File) => {
+    try {
+      const d = await uploadBlockFile(file);
+      onChange({ url: d.url, name: d.name, size: d.size });
+    } catch {
+      // fail silently: upload error, block stays empty, user can retry
+    }
+  };
+
+  return content.url ? (
+    <a href={content.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent">
+      <FileIcon className="h-4 w-4 text-muted-foreground" /> {content.name} <span className="text-xs text-muted-foreground">({formatBytes(content.size)})</span>
+    </a>
+  ) : (
+    <>
+      <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:text-primary cursor-pointer">
+        <Upload className="h-4 w-4" /> Upload a file
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onFile(f);
+          e.target.value = "";
+        }}
+      />
+    </>
+  );
+}
+
+const CODE_LANGUAGES = ["text", "javascript", "typescript", "python", "sql", "json", "bash"];
+
+export function CodeBlockView({ content, onChange }: { content: CodeBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  return (
+    <div className="overflow-hidden rounded-lg border bg-muted/40">
+      <div className="flex items-center justify-between border-b px-2 py-1">
+        <select
+          value={content.language}
+          onChange={(e) => onChange({ ...content, language: e.target.value })}
+          className="bg-transparent text-xs text-muted-foreground cursor-pointer"
+        >
+          {CODE_LANGUAGES.map((lang) => (
+            <option key={lang} value={lang}>{lang}</option>
+          ))}
+        </select>
+      </div>
+      <Textarea
+        value={content.code}
+        onChange={(e) => onChange({ ...content, code: e.target.value })}
+        placeholder="Type code…"
+        rows={4}
+        className="resize-y border-0 bg-transparent px-3 py-2 font-mono text-xs shadow-none focus-visible:ring-0"
+      />
+    </div>
+  );
+}
+
 export function PageBlockView({ content, onChange, workspace, pageId }: { content: PageBlockContent; onChange: (c: BlockContentUpdater) => void; workspace?: string; pageId?: string }) {
   const [title, setTitle] = React.useState<string | null>(null);
 
@@ -1049,5 +1281,309 @@ export function LinkPageBlockView({ content, onChange, workspace }: { content: L
         ))}
       </PopoverContent>
     </Popover>
+  );
+}
+
+export function ColumnsBlockView({ content, onChange }: { content: ColumnsBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const addToColumn = (colIndex: number) => {
+    const child: BlockDto = { id: generateUUID(), workspace: "", order: content.columns[colIndex].length, type: "text", content: { text: "" } };
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const columns = p.columns.map((col, i) => (i === colIndex ? [...col, child] : col));
+      return { ...p, columns };
+    });
+  };
+
+  const updateChild = (colIndex: number, childIndex: number, next: BlockContentUpdater) => {
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const col = p.columns[colIndex];
+      const child = col[childIndex];
+      const resolved = typeof next === "function" ? next(child.content) : next;
+      const newCol = col.map((c, i) => (i === childIndex ? { ...c, content: resolved } : c));
+      const columns = p.columns.map((c, i) => (i === colIndex ? newCol : c));
+      return { ...p, columns };
+    });
+  };
+
+  const removeChild = (colIndex: number, childIndex: number) => {
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const columns = p.columns.map((c, i) => (i === colIndex ? c.filter((_, ci) => ci !== childIndex) : c));
+      return { ...p, columns };
+}
+
+export function VideoBlockView({ content, onChange }: { content: VideoBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const fileRef = React.useRef<HTMLInputElement>(null);
+
+  const onFile = async (file: File) => {
+    try {
+      const d = await uploadBlockFile(file);
+      onChange({ ...content, url: d.url });
+    } catch {
+      // fail silently: upload error, old URL persists, user can retry or paste manually
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {content.url ? (
+        <video src={content.url} controls className="max-h-80 w-full rounded-lg border" />
+      ) : (
+        <div className="flex h-28 items-center justify-center rounded-lg border-2 border-dashed border-border/60 text-sm text-muted-foreground">No video yet</div>
+      )}
+      <div className="flex items-center gap-2">
+        <Input value={content.url} onChange={(e) => onChange({ ...content, url: e.target.value })} placeholder="Paste a video URL…" className="h-8 flex-1 text-xs" />
+        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => fileRef.current?.click()}>
+          <Upload className="h-3.5 w-3.5" /> Upload
+        </Button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="video/*"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onFile(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function FileBlockView({ content, onChange }: { content: FileBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const fileRef = React.useRef<HTMLInputElement>(null);
+
+  const onFile = async (file: File) => {
+    try {
+      const d = await uploadBlockFile(file);
+      onChange({ url: d.url, name: d.name, size: d.size });
+    } catch {
+      // fail silently: upload error, block stays empty, user can retry
+    }
+  };
+
+  return content.url ? (
+    <a href={content.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent">
+      <FileIcon className="h-4 w-4 text-muted-foreground" /> {content.name} <span className="text-xs text-muted-foreground">({formatBytes(content.size)})</span>
+    </a>
+  ) : (
+    <>
+      <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:text-primary cursor-pointer">
+        <Upload className="h-4 w-4" /> Upload a file
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onFile(f);
+          e.target.value = "";
+        }}
+      />
+    </>
+  );
+}
+
+const CODE_LANGUAGES = ["text", "javascript", "typescript", "python", "sql", "json", "bash"];
+
+export function CodeBlockView({ content, onChange }: { content: CodeBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  return (
+    <div className="overflow-hidden rounded-lg border bg-muted/40">
+      <div className="flex items-center justify-between border-b px-2 py-1">
+        <select
+          value={content.language}
+          onChange={(e) => onChange({ ...content, language: e.target.value })}
+          className="bg-transparent text-xs text-muted-foreground cursor-pointer"
+        >
+          {CODE_LANGUAGES.map((lang) => (
+            <option key={lang} value={lang}>{lang}</option>
+          ))}
+        </select>
+      </div>
+      <Textarea
+        value={content.code}
+        onChange={(e) => onChange({ ...content, code: e.target.value })}
+        placeholder="Type code…"
+        rows={4}
+        className="resize-y border-0 bg-transparent px-3 py-2 font-mono text-xs shadow-none focus-visible:ring-0"
+      />
+    </div>
+  );
+}
+
+export function PageBlockView({ content, onChange, workspace, pageId }: { content: PageBlockContent; onChange: (c: BlockContentUpdater) => void; workspace?: string; pageId?: string }) {
+  const [title, setTitle] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!content.pageId || !workspace) return;
+    fetch(`/api/notes?ws=${workspace}`).then((r) => r.json()).then((d) => {
+      const page = (d.notes ?? []).find((n: { id: string }) => n.id === content.pageId);
+      setTitle(page?.title ?? "Untitled");
+    });
+  }, [content.pageId, workspace]);
+
+  const createSubPage = async () => {
+    if (!workspace) return;
+    const res = await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace, parentId: pageId }),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+    onChange({ pageId: d.note.id });
+  };
+
+  if (!content.pageId) {
+    return (
+      <button onClick={createSubPage} className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:text-primary cursor-pointer">
+        <FileText className="h-4 w-4" /> New sub-page
+      </button>
+    );
+  }
+  return (
+    <Link href={`/notes?id=${content.pageId}`} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent">
+      <FileText className="h-4 w-4 text-muted-foreground" /> {title ?? "Loading…"}
+    </Link>
+  );
+}
+
+export function LinkPageBlockView({ content, onChange, workspace }: { content: LinkPageBlockContent; onChange: (c: BlockContentUpdater) => void; workspace?: string }) {
+  const [pages, setPages] = React.useState<{ id: string; title: string }[]>([]);
+  const [open, setOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!workspace) return;
+    fetch(`/api/notes?ws=${workspace}`).then((r) => r.json()).then((d) => setPages(d.notes ?? []));
+  }, [workspace]);
+
+  const selected = pages.find((p) => p.id === content.pageId);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent cursor-pointer">
+        <Link2Icon className="h-4 w-4 text-muted-foreground" /> {selected ? selected.title : "Link to page…"}
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-1">
+        {pages.map((p) => (
+          <button key={p.id} onClick={() => { onChange({ pageId: p.id }); setOpen(false); }} className="block w-full truncate rounded px-2 py-1.5 text-left text-sm hover:bg-accent cursor-pointer">
+            {p.title || "Untitled"}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export function ColumnsBlockView({ content, onChange }: { content: ColumnsBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const addToColumn = (colIndex: number) => {
+    const child: BlockDto = { id: generateUUID(), workspace: "", order: content.columns[colIndex].length, type: "text", content: { text: "" } };
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const columns = p.columns.map((col, i) => (i === colIndex ? [...col, child] : col));
+      return { ...p, columns };
+    });
+  };
+
+  const updateChild = (colIndex: number, childIndex: number, next: BlockContentUpdater) => {
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const col = p.columns[colIndex];
+      const child = col[childIndex];
+      const resolved = typeof next === "function" ? next(child.content) : next;
+      const newCol = col.map((c, i) => (i === childIndex ? { ...c, content: resolved } : c));
+      const columns = p.columns.map((c, i) => (i === colIndex ? newCol : c));
+      return { ...p, columns };
+    });
+  };
+
+  const removeChild = (colIndex: number, childIndex: number) => {
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const columns = p.columns.map((c, i) => (i === colIndex ? c.filter((_, ci) => ci !== childIndex) : c));
+      return { ...p, columns };
+    });
+  };
+
+  return (
+    <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${content.columnCount}, minmax(0, 1fr))` }}>
+      {content.columns.map((col, colIndex) => (
+        <div key={colIndex} className="space-y-1 border-l pl-3 first:border-l-0 first:pl-0">
+          {col.map((child, childIndex) => (
+            <BlockView
+              key={child.id}
+              block={child}
+              onChange={(c) => updateChild(colIndex, childIndex, c)}
+              onDelete={() => removeChild(colIndex, childIndex)}
+              onMoveUp={() => {}}
+              onMoveDown={() => {}}
+              isFirst
+              isLast
+            />
+          ))}
+          <button onClick={() => addToColumn(colIndex)} className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer">
+            <Plus className="h-3.5 w-3.5" /> Add
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4"];
+
+export function ChartBlockView({ content, onChange }: { content: ChartBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const chartType = content.chartType || "bar";
+  const data = content.data || [{ name: "A", value: 400 }, { name: "B", value: 300 }, { name: "C", value: 300 }, { name: "D", value: 200 }];
+
+  const setType = (t: "bar" | "line" | "pie") => onChange({ ...content, chartType: t, data });
+
+  return (
+    <div className="rounded-lg border bg-card p-4 shadow-sm">
+      <div className="mb-4 flex items-center gap-2 border-b pb-2">
+        <button onClick={() => setType("bar")} className={cn("flex items-center gap-1.5 rounded px-2 py-1 text-xs cursor-pointer", chartType === "bar" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50")}>
+          <BarChart3 className="h-3.5 w-3.5" /> Bar
+        </button>
+        <button onClick={() => setType("line")} className={cn("flex items-center gap-1.5 rounded px-2 py-1 text-xs cursor-pointer", chartType === "line" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50")}>
+          <LineChartIcon className="h-3.5 w-3.5" /> Line
+        </button>
+        <button onClick={() => setType("pie")} className={cn("flex items-center gap-1.5 rounded px-2 py-1 text-xs cursor-pointer", chartType === "pie" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50")}>
+          <PieChartIcon className="h-3.5 w-3.5" /> Pie
+        </button>
+      </div>
+
+      <div className="h-64 w-full text-xs">
+        <ResponsiveContainer width="100%" height="100%">
+          {chartType === "bar" ? (
+            <BarChart data={data} margin={{ left: -20, right: 10 }}>
+              <XAxis dataKey="name" stroke="#888888" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis stroke="#888888" fontSize={11} tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", fontSize: 12, backgroundColor: "var(--background)" }} />
+              <Bar dataKey="value" fill="var(--primary)" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          ) : chartType === "line" ? (
+            <LineChart data={data} margin={{ left: -20, right: 10 }}>
+              <XAxis dataKey="name" stroke="#888888" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis stroke="#888888" fontSize={11} tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", fontSize: 12, backgroundColor: "var(--background)" }} />
+              <Line type="monotone" dataKey="value" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+            </LineChart>
+          ) : (
+            <PieChart>
+              <Pie data={data} cx="50%" cy="50%" outerRadius={80} fill="#8884d8" dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                {data.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", fontSize: 12, backgroundColor: "var(--background)" }} />
+            </PieChart>
+          )}
+        </ResponsiveContainer>
+      </div>
+    </div>
   );
 }
