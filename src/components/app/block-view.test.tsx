@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
+import * as React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import type { NumberedBlockContent, NumberedItem } from "@/lib/types";
 import {
   HeadingBlockView,
   DividerBlockView,
   QuoteBlockView,
   CalloutBlockView,
+  NumberedBlockView,
 } from "@/components/app/block-view";
 
 // this project's vitest config doesn't set `test.globals: true`, so RTL's auto-cleanup (which
@@ -72,5 +75,101 @@ describe("CalloutBlockView", () => {
     render(<CalloutBlockView content={{ text: "", icon: "💡" }} onChange={onChange} />);
     fireEvent.change(screen.getByPlaceholderText("Callout text"), { target: { value: "New text" } });
     expect(onChange).toHaveBeenCalledWith({ text: "New text", icon: "💡" });
+  });
+});
+
+/** Stateful wrapper: NumberedBlockView is a controlled component whose interactions (Enter,
+ *  Backspace) only take visible effect once the parent applies onChange back into `content` —
+ *  exactly how the real page component drives it. */
+function NumberedBlockHarness({ initialItems, onEmptyBackspaceOnly }: { initialItems: NumberedItem[]; onEmptyBackspaceOnly?: () => void }) {
+  const [content, setContent] = React.useState<NumberedBlockContent>({ items: initialItems });
+  return (
+    <NumberedBlockView
+      content={content}
+      onChange={(c) => setContent((prev) => (typeof c === "function" ? (c(prev) as NumberedBlockContent) : (c as NumberedBlockContent)))}
+      onEmptyBackspaceOnly={onEmptyBackspaceOnly}
+    />
+  );
+}
+
+describe("NumberedBlockView", () => {
+  it("renders items with correct 1. 2. 3. prefixes", () => {
+    render(
+      <NumberedBlockHarness
+        initialItems={[
+          { id: "a", text: "First" },
+          { id: "b", text: "Second" },
+          { id: "c", text: "Third" },
+        ]}
+      />
+    );
+    const prefixes = ["1.", "2.", "3."].map((p) => screen.getByText(p));
+    expect(prefixes).toHaveLength(3);
+    expect(screen.getByDisplayValue("First")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Second")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Third")).toBeInTheDocument();
+  });
+
+  it("pressing Enter in an item adds a new one after it and renumbers", () => {
+    render(
+      <NumberedBlockHarness
+        initialItems={[
+          { id: "a", text: "First" },
+          { id: "b", text: "Second" },
+        ]}
+      />
+    );
+    fireEvent.keyDown(screen.getByDisplayValue("First"), { key: "Enter" });
+
+    // three items now: First, (new empty), Second — with a fresh "1. 2. 3." numbering
+    const inputs = screen.getAllByPlaceholderText("List item");
+    expect(inputs).toHaveLength(3);
+    expect(inputs[0]).toHaveValue("First");
+    expect(inputs[1]).toHaveValue("");
+    expect(inputs[2]).toHaveValue("Second");
+    expect(screen.getByText("1.")).toBeInTheDocument();
+    expect(screen.getByText("2.")).toBeInTheDocument();
+    expect(screen.getByText("3.")).toBeInTheDocument();
+  });
+
+  it("pressing Backspace on an empty item removes it and renumbers", () => {
+    render(
+      <NumberedBlockHarness
+        initialItems={[
+          { id: "a", text: "First" },
+          { id: "b", text: "" },
+          { id: "c", text: "Third" },
+        ]}
+      />
+    );
+    const emptyInput = screen.getAllByPlaceholderText("List item")[1];
+    fireEvent.keyDown(emptyInput, { key: "Backspace" });
+
+    const inputs = screen.getAllByPlaceholderText("List item");
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]).toHaveValue("First");
+    expect(inputs[1]).toHaveValue("Third");
+    expect(screen.getByText("1.")).toBeInTheDocument();
+    expect(screen.getByText("2.")).toBeInTheDocument();
+    expect(screen.queryByText("3.")).not.toBeInTheDocument();
+  });
+
+  it("Backspace on the sole remaining empty item calls onEmptyBackspaceOnly instead of removing it", () => {
+    const onEmptyBackspaceOnly = vi.fn();
+    render(<NumberedBlockHarness initialItems={[{ id: "a", text: "" }]} onEmptyBackspaceOnly={onEmptyBackspaceOnly} />);
+    fireEvent.keyDown(screen.getByPlaceholderText("List item"), { key: "Backspace" });
+    expect(onEmptyBackspaceOnly).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByPlaceholderText("List item")).toHaveLength(1);
+  });
+
+  it("shows an empty-state Add item button with zero items, and clicking it creates the first item", () => {
+    render(<NumberedBlockHarness initialItems={[]} />);
+    expect(screen.queryByPlaceholderText("List item")).not.toBeInTheDocument();
+    const addButton = screen.getByRole("button", { name: /add item/i });
+    expect(addButton).toBeInTheDocument();
+
+    fireEvent.click(addButton);
+    expect(screen.getByPlaceholderText("List item")).toBeInTheDocument();
+    expect(screen.getByText("1.")).toBeInTheDocument();
   });
 });

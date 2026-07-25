@@ -38,6 +38,7 @@ import type {
   CalloutBlockContent,
   HeadingBlockContent,
   ImageBlockContent,
+  NumberedBlockContent,
   QuoteBlockContent,
   SubTableDef,
   TableBlockContent,
@@ -124,6 +125,12 @@ export function BlockView({
           />
         )}
         {block.type === "bullet" && (
+          <BulletBlockView content={block.content as BulletBlockContent} onChange={onChange} onEmptyBackspaceOnly={onBackspaceEmpty} />
+        )}
+        {block.type === "numbered" && (
+          <NumberedBlockView content={block.content as NumberedBlockContent} onChange={onChange} onEmptyBackspaceOnly={onBackspaceEmpty} />
+        )}
+        {block.type === "todo" && (
           <BulletBlockView content={block.content as BulletBlockContent} onChange={onChange} onEmptyBackspaceOnly={onBackspaceEmpty} />
         )}
         {block.type === "table" && (
@@ -432,6 +439,81 @@ export function BulletBlockView({
           onClick={() => addItemAfter(items.length - 1)}
           className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer"
         >
+          <Plus className="h-3.5 w-3.5" /> Add item
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function NumberedBlockView({ content, onChange, onEmptyBackspaceOnly }: {
+  content: NumberedBlockContent;
+  onChange: (c: BlockContentUpdater) => void;
+  onEmptyBackspaceOnly?: () => void;
+}) {
+  const items = content.items;
+  const setItems = (next: typeof items) => onChange({ items: next });
+  const refs = React.useRef<Record<string, HTMLInputElement | null>>({});
+  const pendingFocusId = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    if (pendingFocusId.current && refs.current[pendingFocusId.current]) {
+      refs.current[pendingFocusId.current]!.focus();
+      pendingFocusId.current = null;
+    }
+  }, [items]);
+
+  const addItemAfter = (index: number) => {
+    const id = generateUUID();
+    const next = [...items];
+    next.splice(index + 1, 0, { id, text: "" });
+    pendingFocusId.current = id;
+    setItems(next);
+  };
+
+  const removeItemAndFocusPrev = (index: number) => {
+    if (items.length <= 1) {
+      onEmptyBackspaceOnly?.();
+      return;
+    }
+    const prev = items[index - 1];
+    setItems(items.filter((_, i) => i !== index));
+    if (prev) pendingFocusId.current = prev.id;
+  };
+
+  return (
+    <div className="space-y-1">
+      {items.length === 0 && (
+        <button onClick={() => setItems([{ id: generateUUID(), text: "" }])} className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer">
+          <Plus className="h-3.5 w-3.5" /> Add item
+        </button>
+      )}
+      {items.map((item, i) => (
+        <div key={item.id} className="group/item flex items-center gap-2">
+          <span className="w-4 shrink-0 text-right text-xs text-muted-foreground">{i + 1}.</span>
+          <Input
+            ref={(el) => { refs.current[item.id] = el; }}
+            value={item.text}
+            onChange={(e) => setItems(items.map((x) => (x.id === item.id ? { ...x, text: e.target.value } : x)))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addItemAfter(i);
+              } else if (e.key === "Backspace" && item.text === "") {
+                e.preventDefault();
+                removeItemAndFocusPrev(i);
+              }
+            }}
+            placeholder="List item"
+            className="h-7 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-1"
+          />
+          <button onClick={() => setItems(items.filter((x) => x.id !== item.id))} className="shrink-0 text-muted-foreground opacity-0 hover:text-status-bad group-hover/item:opacity-100 cursor-pointer">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ))}
+      {items.length > 0 && (
+        <button onClick={() => addItemAfter(items.length - 1)} className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer">
           <Plus className="h-3.5 w-3.5" /> Add item
         </button>
       )}
