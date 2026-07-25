@@ -177,9 +177,9 @@ describe("NumberedBlockView", () => {
 
 const TEXT_PLACEHOLDER = "Type something, or '/' for commands…";
 
-/** Stateful wrapper: mirrors how the real page drives ToggleBlockView — onChange may hand back
- *  either a plain content object (addChild/removeChild) or an updater function (updateChild),
- *  and this harness resolves both against the latest state exactly like the real save flow does. */
+/** Stateful wrapper: mirrors how the real page drives ToggleBlockView — onChange always hands back
+ *  an updater function, and this harness resolves it against the latest state exactly like the
+ *  real save flow does. */
 function ToggleBlockHarness({ initial }: { initial: ToggleBlockContent }) {
   const [content, setContent] = React.useState<ToggleBlockContent>(initial);
   return (
@@ -262,7 +262,35 @@ describe("ToggleBlockView", () => {
     expect(deleteButtons).toHaveLength(2);
     fireEvent.click(deleteButtons[1]); // remove "remove me"
 
-    expect(onChange).toHaveBeenCalledWith({ text: "Toggle", children: [content.children[0]] });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const updater = onChange.mock.calls[0][0];
+    expect(typeof updater).toBe("function");
+    const result = updater(content) as ToggleBlockContent;
+    expect(result).toEqual({ text: "Toggle", children: [content.children[0]] });
+  });
+
+  it("addChild and removeChild resolve against the latest content, not a stale closure (same-tick safety)", () => {
+    const content: ToggleBlockContent = {
+      text: "Toggle",
+      children: [makeChild("child-1", "first")],
+    };
+    const onChange = vi.fn();
+    render(<ToggleBlockView content={content} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button")); // expand
+    fireEvent.click(screen.getByRole("button", { name: /add inside toggle/i }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const addUpdater = onChange.mock.calls[0][0];
+    expect(typeof addUpdater).toBe("function");
+
+    // Simulate a same-tick race: resolve addChild's updater against content that already
+    // reflects a concurrent removeChild, proving addChild doesn't clobber it with a stale
+    // closure-captured `content`.
+    const staleRaceBase: ToggleBlockContent = { text: "Toggle", children: [] };
+    const result = addUpdater(staleRaceBase) as ToggleBlockContent;
+    expect(result.children).toHaveLength(1);
+    expect(result.text).toBe("Toggle");
   });
 
   it("renders the toggle's own label at plain text size with no level set", () => {

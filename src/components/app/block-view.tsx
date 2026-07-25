@@ -532,8 +532,11 @@ export function ToggleBlockView({ content, onChange }: { content: ToggleBlockCon
   const HeadingTag = content.level ? (["h1", "h2", "h3"][content.level - 1] as "h1" | "h2" | "h3") : null;
 
   const addChild = () => {
-    const child: BlockDto = { id: generateUUID(), workspace: "", order: content.children.length, type: "text", content: { text: "" } };
-    onChange({ ...content, children: [...content.children, child] });
+    onChange((prev) => {
+      const p = prev as ToggleBlockContent;
+      const child: BlockDto = { id: generateUUID(), workspace: "", order: p.children.length, type: "text", content: { text: "" } };
+      return { ...p, children: [...p.children, child] };
+    });
   };
 
   const updateChild = (index: number, next: BlockContentUpdater) => {
@@ -546,7 +549,11 @@ export function ToggleBlockView({ content, onChange }: { content: ToggleBlockCon
     });
   };
 
-  const removeChild = (index: number) => onChange({ ...content, children: content.children.filter((_, i) => i !== index) });
+  const removeChild = (index: number) =>
+    onChange((prev) => {
+      const p = prev as ToggleBlockContent;
+      return { ...p, children: p.children.filter((_, i) => i !== index) };
+    });
 
   return (
     <div>
@@ -556,7 +563,10 @@ export function ToggleBlockView({ content, onChange }: { content: ToggleBlockCon
         </button>
         <Input
           value={content.text}
-          onChange={(e) => onChange({ ...content, text: e.target.value })}
+          onChange={(e) => {
+            const text = e.target.value;
+            onChange((prev) => ({ ...(prev as ToggleBlockContent), text }));
+          }}
           placeholder="Toggle"
           className={cn(
             "h-auto flex-1 border-0 bg-transparent px-1 py-1 shadow-none focus-visible:ring-1",
