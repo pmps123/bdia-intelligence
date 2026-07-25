@@ -75,8 +75,10 @@ async function copyDirect(model: string, chunkSize = 500) {
   let inserted = 0;
   for (let i = 0; i < rows.length; i += chunkSize) {
     // Supabase already holds a prior partial migration snapshot for most models — skipDuplicates
-    // (Postgres ON CONFLICT DO NOTHING under the hood) makes this a safe merge: rows whose id
-    // already exists in the destination are left untouched, only new rows get inserted.
+    // (Postgres ON CONFLICT DO NOTHING under the hood) skips on any unique-constraint conflict,
+    // not just id. For this one-shot merge that's safe given the data, but note: rows with new
+    // ids can still be skipped if they violate secondary unique constraints like
+    // MasterMapping's [vendorName, vendorKey] or SalesmanRow's [workspace, bulan, legacyCode].
     const result = await (pg as any)[model].createMany({ data: rows.slice(i, i + chunkSize), skipDuplicates: true });
     inserted += result.count;
   }
