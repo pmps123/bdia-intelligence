@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 import os from "os";
 import type { ParsedFile, ParsedSheet } from "@/lib/types";
 import { PositionedWord, detectColumnBoundaries, wordsToRow, alignBlocksToCommonColumns, parseNumeric } from "./table-reconstruction";
+import { reconstructTextLayerTable } from "./pdf-text-layer";
 
 export { parseNumeric };
 
@@ -94,9 +95,9 @@ function sheetFromMatrix(
   if (normalized.length === 0) {
     return { name, index, rowCount: 0, columnCount: 0, headers: [], headerRowIndex: 0, rows: [] };
   }
-  // Real header text recovered from the PDF's own header region (see extractHeaderLabels) beats
-  // any heuristic guess - these rows never need stripping since they came from a separate crop,
-  // not from a row within this matrix.
+  // Real header text recovered from the PDF's own header region (see extractHeaderLabels /
+  // extractWrappedHeader) beats any heuristic guess - these rows never need stripping since they
+  // came from a separate crop or a dedicated header-merge pass, not from a row within this matrix.
   if (opts?.explicitHeaders && opts.explicitHeaders.some((h) => h !== "")) {
     const headers = Array.from({ length: width }, (_, i) => opts.explicitHeaders![i] || `Column ${i + 1}`);
     return { name, index, rowCount: normalized.length, columnCount: width, headers, headerRowIndex: -1, rows: normalized };
@@ -664,12 +665,18 @@ async function ocrPdfTable(
 }
 
 /**
- * PDF parsing: extract text lines and reconstruct a table heuristically.
- * When a real text layer exists, columns are split on runs of 2+ spaces or
- * tab characters - the delimiter is detected from the document itself, never
- * assumed. Scanned/signed PDFs have no text layer to split that way, so
- * their table grid is reconstructed from OCR word geometry instead (see
- * ocrPdfTable) rather than guessed from spacing in flattened OCR text.
+ * PDF parsing: extract text and reconstruct a table.
+ *
+ * When a real text layer exists, the real x/y position of every piece of text is reconstructed
+ * into rows and columns (see reconstructTextLayerTable / pdf-text-layer.ts) - the same technique
+ * already used for OCR word boxes, now applied to a PDF's own, exact text positions instead of a
+ * scanned image's. This replaced the old "split on 2+ spaces or a tab" heuristic, which silently
+ * produced garbage whenever a PDF's text stream didn't insert extra spaces between columns (the
+ * majority case in a real vendor-document survey - see design doc). That old heuristic is kept as
+ * a fallback for the rare case where position-based reconstruction itself looks degenerate.
+ *
+ * Scanned/signed PDFs have no text layer at all, so their table grid is reconstructed from OCR
+ * word geometry instead (see ocrPdfTable).
  */
 export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   const pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default as (b: Buffer) => Promise<{ text: string }>;
@@ -677,6 +684,7 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
 
   let matrix: string[][];
   let ocrHeaderLabels: string[] | null = null;
+  let textLayerHeaderLabels: string[] | null = null;
   let ocrCategoryHints: (string | null)[] | null = null;
   const isOcr = text.trim() === "";
   if (isOcr) {
@@ -685,11 +693,19 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
     ocrHeaderLabels = result.headerLabels;
     ocrCategoryHints = result.categoryHints;
   } else {
-    const lines = text
-      .split(/\r?\n/)
-      .map((l) => l.trimEnd())
-      .filter((l) => l.trim() !== "");
-    matrix = lines.map((line) => line.split(/\t| {2,}/).map((c) => c.trim()).filter((c, i, arr) => !(c === "" && i === arr.length - 1)));
+    const reconstructed = await reconstructTextLayerTable(buffer);
+    if (reconstructed && reconstructed.matrix.length > 0) {
+      matrix = reconstructed.matrix;
+      textLayerHeaderLabels = reconstructed.headers;
+    } else {
+      // Fallback: position-based reconstruction found nothing usable (or came back degenerate) -
+      // the original whitespace-split heuristic, unchanged, is the safety net.
+      const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.trimEnd())
+        .filter((l) => l.trim() !== "");
+      matrix = lines.map((line) => line.split(/\t| {2,}/).map((c) => c.trim()).filter((c, i, arr) => !(c === "" && i === arr.length - 1)));
+    }
   }
 
   if (matrix.length === 0) {
@@ -698,6 +714,7 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
     );
   }
   const width = matrix.reduce((m, r) => Math.max(m, r.length), 0);
+  const detectedHeaderLabels = isOcr ? ocrHeaderLabels : textLayerHeaderLabels;
 
   // A category break - a section title ("COOKER HOOD", "ELECTRIC WATER HEATER") sitting between
   // two blocks of what the tabular filter below flattens into one continuous table (see
@@ -758,10 +775,11 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
     (c) => source.filter((r) => (r[c] ?? "") !== "").length / source.length >= 0.1
   );
   const pruned = keepCols.length > 0 ? source.map((r) => keepCols.map((c) => r[c] ?? "")) : source;
-  // ocrHeaderLabels was built in the same column space as the un-pruned matrix (one label per
-  // detectColumnBoundaries bucket), so it must be pruned the same way to stay index-synced.
+  // detectedHeaderLabels was built in the same column space as the un-pruned matrix (one label per
+  // detectColumnBoundaries bucket, for both the OCR path and the text-layer path), so it must be
+  // pruned the same way to stay index-synced.
   const prunedHeaderLabels =
-    ocrHeaderLabels && keepCols.length > 0 ? keepCols.map((c) => ocrHeaderLabels![c] ?? "") : ocrHeaderLabels;
+    detectedHeaderLabels && keepCols.length > 0 ? keepCols.map((c) => detectedHeaderLabels![c] ?? "") : detectedHeaderLabels;
 
   // A row with no numeric value anywhere carries zero price information - whatever text landed in
   // its other cells (a signature stroke, a misread border, a stray footnote fragment - "DU", "Ld",
@@ -769,7 +787,9 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   // and only clutters a price audit that's fundamentally about comparing numbers. The 3-digit
   // floor rules out a lone stray digit ("1", "2") passing as a "price" while staying far below any
   // real price or code in this kind of document. Real spreadsheets never hit this path - it's
-  // scoped to the reconstructed-from-OCR matrix's own noise, not a general row filter.
+  // scoped to the reconstructed-from-OCR matrix's own noise, not a general row filter. The
+  // reconstructed-from-text-layer matrix is exact (real characters, not OCR guesses), so it isn't
+  // filtered this way either - only the OCR path's own noise gets this treatment.
   const hasUsableNumber = (r: string[]) => r.some((c) => { const n = parseNumeric(c); return n !== null && Math.abs(n) >= 100; });
   const keepRows = isOcr ? pruned.map(hasUsableNumber) : pruned.map(() => true);
   const numericFiltered = keepRows.every(Boolean) ? pruned : pruned.filter((_, i) => keepRows[i]);
@@ -789,9 +809,9 @@ export async function parsePdf(buffer: Buffer): Promise<ParsedFile> {
   // against this, detectHeader picked an ordinary product row as "the header" and every row above
   // it - several genuine products - silently vanished (rows before headerRowIndex are discarded).
   // Skipping header detection for OCR output only avoids that; a real text-layer PDF table keeps
-  // normal header detection, since its structure is exact, not reconstructed. When the header
-  // region itself was OCR'd successfully (extractHeaderLabels), those real labels are used
-  // directly instead of falling back to generic "Column N" placeholders.
+  // normal header detection as a last resort when no explicit header was recovered, since sheet-
+  // FromMatrix already prefers explicitHeaders (from OCR's extractHeaderLabels or the text-layer
+  // path's extractWrappedHeader) over any heuristic guess whenever one was actually found.
   return {
     fileType: "pdf",
     sheets: [
@@ -805,4 +825,3 @@ export async function parseUploadedFile(buffer: Buffer, fileName: string): Promi
   if (ext === "pdf") return parsePdf(buffer);
   return parseSpreadsheet(buffer, ext || "xlsx");
 }
-

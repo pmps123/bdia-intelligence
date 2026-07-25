@@ -3,7 +3,16 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronRight, ChevronDown, Plus, FileText, Settings, Search, Clock } from "lucide-react";
+import {
+  ChevronRight,
+  ChevronDown,
+  Plus,
+  FileText,
+  ClipboardCheck,
+  Megaphone,
+  Users,
+  LayoutDashboard,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface Page {
@@ -20,6 +29,17 @@ interface SidebarProps {
   collapsed: boolean;
   WorkspaceSwitcher: React.ReactNode;
 }
+
+/** Static shortcuts to the app's non-Notion tools — not sourced from `pages`, since these are
+ *  fixed app routes rather than user-created Notion-like pages.
+ *  NOTE: Marketing and Sales Dashboard both currently point at /project as a placeholder —
+ *  swap in the real sub-route/query param once that page exposes distinct views. */
+const TOOL_LINKS = [
+  { href: "/price-audit", label: "Audit Price", icon: ClipboardCheck },
+  { href: "/transform/marketing", label: "Marketing", icon: Megaphone },
+  { href: "/salesman", label: "Salesman", icon: Users },
+  { href: "/transform", label: "Sales Dashboard", icon: LayoutDashboard },
+];
 
 export function Sidebar({ workspaceId, pages, onAddPage, collapsed, WorkspaceSwitcher }: SidebarProps) {
   const pathname = usePathname();
@@ -46,21 +66,9 @@ export function Sidebar({ workspaceId, pages, onAddPage, collapsed, WorkspaceSwi
         {WorkspaceSwitcher}
       </div>
 
-      <div className="px-3 pb-2 pt-1 flex flex-col gap-0.5">
-        <button className="flex items-center gap-2 rounded px-2 py-1 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent cursor-pointer">
-          <Search className="h-4 w-4" /> Search
-        </button>
-        <button className="flex items-center gap-2 rounded px-2 py-1 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent cursor-pointer">
-          <Clock className="h-4 w-4" /> Updates
-        </button>
-        <button className="flex items-center gap-2 rounded px-2 py-1 text-sm text-sidebar-foreground/70 hover:bg-sidebar-accent cursor-pointer">
-          <Settings className="h-4 w-4" /> Settings & members
-        </button>
-      </div>
-
       <div className="flex-1 overflow-y-auto thin-scroll pb-4">
         {favorites.length > 0 && (
-          <div className="mt-4">
+          <div className="mt-2">
             <div className="group flex items-center justify-between px-3 py-1 text-[11px] font-semibold text-sidebar-foreground/45 hover:text-sidebar-foreground/70 cursor-pointer">
               <span>Favorites</span>
             </div>
@@ -79,6 +87,33 @@ export function Sidebar({ workspaceId, pages, onAddPage, collapsed, WorkspaceSwi
             </button>
           </div>
           <PageTree pages={pages.filter((p) => p.parentId === null && p.order !== -1)} allPages={pages} level={0} pathname={pathname} onAddPage={onAddPage} />
+        </div>
+
+        <div className="mt-4">
+          <div className="px-3 py-1 text-[11px] font-semibold text-sidebar-foreground/45">
+            <span>Tools</span>
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {TOOL_LINKS.map((tool) => {
+              const isActive = pathname === tool.href;
+              return (
+                <Link
+                  key={tool.label}
+                  href={tool.href}
+                  className={cn(
+                    "flex items-center gap-2 rounded text-sm transition-colors min-h-[28px] py-1",
+                    isActive
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                  )}
+                  style={{ paddingLeft: "8px" }}
+                >
+                  <tool.icon className="h-4 w-4 shrink-0 text-sidebar-foreground/50" />
+                  <span className="truncate text-[13px]">{tool.label}</span>
+                </Link>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -127,7 +162,7 @@ function PageItem({
   const [expanded, setExpanded] = React.useState(!!forceExpand);
   const children = allPages.filter((p) => p.parentId === page.id);
   const hasChildren = children.length > 0;
-  
+
   const isActive = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("id") === page.id;
 
   return (
@@ -139,22 +174,22 @@ function PageItem({
         )}
         style={{ paddingLeft: `${(level * 16) + 8}px` }}
       >
-        <div 
+        <div
           className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm hover:bg-sidebar-border cursor-pointer mr-1 text-sidebar-foreground/40 hover:text-sidebar-foreground/80 transition-colors"
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); setExpanded(!expanded); }}
         >
           {hasChildren ? (
             expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />
           ) : (
-            <span className="h-3.5 w-3.5" /> 
+            <span className="h-3.5 w-3.5" />
           )}
         </div>
-        
+
         <Link href={`/notes?id=${page.id}`} className="flex flex-1 items-center gap-2 truncate text-[13px]">
           <FileText className="h-4 w-4 shrink-0 text-sidebar-foreground/50" />
           <span className="truncate">{page.title || "Untitled"}</span>
         </Link>
-        
+
         <button
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); setExpanded(true); onAddPage(page.id); }}
           className="opacity-0 group-hover:opacity-100 h-5 w-5 flex shrink-0 items-center justify-center rounded hover:bg-sidebar-border cursor-pointer text-sidebar-foreground/50 hover:text-sidebar-foreground transition-colors"
