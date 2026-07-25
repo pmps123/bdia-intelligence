@@ -3,13 +3,14 @@ import * as React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
-import type { NumberedBlockContent, NumberedItem } from "@/lib/types";
+import type { BlockDto, NumberedBlockContent, NumberedItem, ToggleBlockContent } from "@/lib/types";
 import {
   HeadingBlockView,
   DividerBlockView,
   QuoteBlockView,
   CalloutBlockView,
   NumberedBlockView,
+  ToggleBlockView,
 } from "@/components/app/block-view";
 
 // this project's vitest config doesn't set `test.globals: true`, so RTL's auto-cleanup (which
@@ -171,5 +172,115 @@ describe("NumberedBlockView", () => {
     fireEvent.click(addButton);
     expect(screen.getByPlaceholderText("List item")).toBeInTheDocument();
     expect(screen.getByText("1.")).toBeInTheDocument();
+  });
+});
+
+const TEXT_PLACEHOLDER = "Type something, or '/' for commands…";
+
+/** Stateful wrapper: mirrors how the real page drives ToggleBlockView — onChange may hand back
+ *  either a plain content object (addChild/removeChild) or an updater function (updateChild),
+ *  and this harness resolves both against the latest state exactly like the real save flow does. */
+function ToggleBlockHarness({ initial }: { initial: ToggleBlockContent }) {
+  const [content, setContent] = React.useState<ToggleBlockContent>(initial);
+  return (
+    <ToggleBlockView
+      content={content}
+      onChange={(c) => setContent((prev) => (typeof c === "function" ? (c(prev) as ToggleBlockContent) : (c as ToggleBlockContent)))}
+    />
+  );
+}
+
+describe("ToggleBlockView", () => {
+  const makeChild = (id: string, text: string): BlockDto => ({
+    id,
+    workspace: "",
+    order: 0,
+    type: "text",
+    content: { text },
+  });
+
+  it("starts collapsed — a nested child isn't in the DOM until expanded — then expand/collapse toggles it", () => {
+    const content: ToggleBlockContent = { text: "My toggle", children: [makeChild("c1", "Hidden text")] };
+    render(<ToggleBlockView content={content} onChange={() => {}} />);
+
+    expect(screen.queryByPlaceholderText(TEXT_PLACEHOLDER)).not.toBeInTheDocument();
+
+    const toggleButton = screen.getByRole("button");
+    fireEvent.click(toggleButton);
+    expect(screen.getByPlaceholderText(TEXT_PLACEHOLDER)).toHaveValue("Hidden text");
+
+    fireEvent.click(toggleButton);
+    expect(screen.queryByPlaceholderText(TEXT_PLACEHOLDER)).not.toBeInTheDocument();
+  });
+
+  it("Add inside toggle creates a new nested text block, which can be typed into", () => {
+    render(<ToggleBlockHarness initial={{ text: "Empty toggle", children: [] }} />);
+
+    fireEvent.click(screen.getByRole("button")); // expand
+    expect(screen.queryByPlaceholderText(TEXT_PLACEHOLDER)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /add inside toggle/i }));
+    const childTextarea = screen.getByPlaceholderText(TEXT_PLACEHOLDER);
+    expect(childTextarea).toHaveValue("");
+
+    fireEvent.change(childTextarea, { target: { value: "typed inside toggle" } });
+    expect(screen.getByPlaceholderText(TEXT_PLACEHOLDER)).toHaveValue("typed inside toggle");
+  });
+
+  it("editing a nested child's content resolves, via the onChange updater, into the parent's content.children array", () => {
+    const onChange = vi.fn();
+    const content: ToggleBlockContent = { text: "Toggle", children: [makeChild("child-1", "original")] };
+    render(<ToggleBlockView content={content} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button")); // expand — local `open` state, no onChange call
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByPlaceholderText(TEXT_PLACEHOLDER), { target: { value: "updated text" } });
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const updater = onChange.mock.calls[0][0];
+    expect(typeof updater).toBe("function");
+
+    // resolve the updater against the real prior content, exactly as the page's save flow would
+    const result = updater(content) as ToggleBlockContent;
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0].id).toBe("child-1");
+    expect(result.children[0].content).toEqual({ text: "updated text" });
+    expect(result.text).toBe("Toggle"); // rest of the parent's own content is untouched
+  });
+
+  it("removing a nested child drops it from content.children", () => {
+    const onChange = vi.fn();
+    const content: ToggleBlockContent = {
+      text: "Toggle",
+      children: [makeChild("child-1", "keep me"), makeChild("child-2", "remove me")],
+    };
+    render(<ToggleBlockView content={content} onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button")); // expand
+    const deleteButtons = screen.getAllByTitle("Delete text block");
+    expect(deleteButtons).toHaveLength(2);
+    fireEvent.click(deleteButtons[1]); // remove "remove me"
+
+    expect(onChange).toHaveBeenCalledWith({ text: "Toggle", children: [content.children[0]] });
+  });
+
+  it("renders the toggle's own label at plain text size with no level set", () => {
+    render(<ToggleBlockView content={{ text: "Plain toggle", children: [] }} onChange={() => {}} />);
+    const label = screen.getByPlaceholderText("Toggle");
+    expect(label).toHaveClass("text-sm");
+    expect(label).not.toHaveClass("text-lg");
+  });
+
+  it("renders the toggle's own label at heading size for level 1/2/3 (Toggle Heading)", () => {
+    for (const level of [1, 2, 3] as const) {
+      const { unmount } = render(
+        <ToggleBlockView content={{ text: `Heading ${level}`, level, children: [] }} onChange={() => {}} />
+      );
+      const label = screen.getByPlaceholderText("Toggle");
+      expect(label).toHaveClass("font-display", "font-semibold", "text-lg");
+      expect(label).not.toHaveClass("text-sm");
+      unmount();
+    }
   });
 });

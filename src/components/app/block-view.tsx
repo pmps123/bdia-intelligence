@@ -5,6 +5,8 @@ import {
   ArrowDown,
   ArrowUp,
   CalendarRange,
+  ChevronDown,
+  ChevronRight,
   GripVertical,
   Heading as HeadingIcon,
   Image as ImageIcon,
@@ -44,6 +46,7 @@ import type {
   TableBlockContent,
   TableViewDef,
   TextBlockContent,
+  ToggleBlockContent,
 } from "@/lib/types";
 
 /** Notion-like "/" menu — offered from a text block, since it's already the block you're typing into. */
@@ -135,6 +138,9 @@ export function BlockView({
         )}
         {block.type === "table" && (
           <TableBlockView content={block.content as TableBlockContent} onChange={onChange} />
+        )}
+        {block.type === "toggle" && (
+          <ToggleBlockView content={block.content as ToggleBlockContent} onChange={onChange} />
         )}
         {block.type === "image" && (
           <ImageBlockView content={block.content as ImageBlockContent} onChange={onChange} />
@@ -516,6 +522,66 @@ export function NumberedBlockView({ content, onChange, onEmptyBackspaceOnly }: {
         <button onClick={() => addItemAfter(items.length - 1)} className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer">
           <Plus className="h-3.5 w-3.5" /> Add item
         </button>
+      )}
+    </div>
+  );
+}
+
+export function ToggleBlockView({ content, onChange }: { content: ToggleBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const [open, setOpen] = React.useState(false);
+  const HeadingTag = content.level ? (["h1", "h2", "h3"][content.level - 1] as "h1" | "h2" | "h3") : null;
+
+  const addChild = () => {
+    const child: BlockDto = { id: generateUUID(), workspace: "", order: content.children.length, type: "text", content: { text: "" } };
+    onChange({ ...content, children: [...content.children, child] });
+  };
+
+  const updateChild = (index: number, next: BlockContentUpdater) => {
+    onChange((prev) => {
+      const p = prev as ToggleBlockContent;
+      const child = p.children[index];
+      const resolved = typeof next === "function" ? next(child.content) : next;
+      const children = p.children.map((c, i) => (i === index ? { ...c, content: resolved } : c));
+      return { ...p, children };
+    });
+  };
+
+  const removeChild = (index: number) => onChange({ ...content, children: content.children.filter((_, i) => i !== index) });
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5">
+        <button onClick={() => setOpen((o) => !o)} className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-accent cursor-pointer">
+          {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </button>
+        <Input
+          value={content.text}
+          onChange={(e) => onChange({ ...content, text: e.target.value })}
+          placeholder="Toggle"
+          className={cn(
+            "h-auto flex-1 border-0 bg-transparent px-1 py-1 shadow-none focus-visible:ring-1",
+            HeadingTag ? "font-display font-semibold text-lg" : "text-sm"
+          )}
+        />
+      </div>
+      {open && (
+        <div className="ml-6 mt-1 space-y-1 border-l pl-3">
+          {content.children.map((child, i) => (
+            <BlockView
+              key={child.id}
+              block={child}
+              onChange={(c) => updateChild(i, c)}
+              onDelete={() => removeChild(i)}
+              onMoveUp={() => {}}
+              onMoveDown={() => {}}
+              isFirst
+              isLast
+            />
+          ))}
+          <button onClick={addChild} className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer">
+            <Plus className="h-3.5 w-3.5" /> Add inside toggle
+          </button>
+        </div>
       )}
     </div>
   );
