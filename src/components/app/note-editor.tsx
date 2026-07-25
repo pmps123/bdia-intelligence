@@ -1,21 +1,48 @@
 "use client";
 
 import * as React from "react";
-import { Heading as HeadingIcon, Image as ImageIcon, ListChecks, Loader2, Plus, Table2, Trash2, Type } from "lucide-react";
+import { Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { BlockView } from "@/components/app/block-view";
+import { SlashMenu, SLASH_MENU_GROUPS } from "@/components/app/slash-menu";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
-import type { BlockContent, BlockDto, BlockType, NoteDto } from "@/lib/types";
+import { emptyBlockContent } from "@/lib/types";
+import type { BlockContent, BlockDto, BlockType, NoteDto, TableBlockContent, TableViewDef } from "@/lib/types";
 
-const ADD_MENU: { type: BlockType; label: string; icon: typeof Type }[] = [
-  { type: "text", label: "Text", icon: Type },
-  { type: "heading", label: "Heading", icon: HeadingIcon },
-  { type: "bullet", label: "Bullet list", icon: ListChecks },
-  { type: "table", label: "Table", icon: Table2 },
-  { type: "image", label: "Photo / Image", icon: ImageIcon },
-];
+type BlockOverrides = { contentOverride?: Partial<BlockContent>; initialViewType?: string };
+
+function applyBlockOverrides(
+  type: BlockType,
+  base: BlockContent,
+  overrides?: BlockOverrides
+): BlockContent {
+  if (overrides?.contentOverride) {
+    return { ...base, ...overrides.contentOverride } as BlockContent;
+  }
+  if (overrides?.initialViewType && overrides.initialViewType !== "table") {
+    const tableContent = base as TableBlockContent;
+    const activeTable = tableContent.tables?.[0] ?? {
+      id: "default",
+      name: "Table 1",
+      columns: tableContent.columns,
+      rows: tableContent.rows,
+    };
+    const view: TableViewDef = {
+      id: crypto.randomUUID(),
+      name: overrides.initialViewType[0].toUpperCase() + overrides.initialViewType.slice(1),
+      type: overrides.initialViewType as TableViewDef["type"],
+    };
+    return {
+      columns: tableContent.columns,
+      rows: tableContent.rows,
+      activeTableId: activeTable.id,
+      tables: [{ ...activeTable, views: [view], activeViewId: view.id }],
+    } as BlockContent;
+  }
+  return base;
+}
 
 /**
  * Shared block-editor body for any Note — the per-workspace Home landing page and every page
@@ -43,6 +70,7 @@ export function NoteEditor({
   const seededFor = React.useRef<string | null>(null);
   const focusRegistry = React.useRef<Record<string, { focus: () => void } | null>>({});
   const [pendingFocusId, setPendingFocusId] = React.useState<string | null>(null);
+  const [addMenuOpen, setAddMenuOpen] = React.useState(false);
 
   React.useEffect(() => setTitle(note?.title ?? ""), [note?.id, note?.title]);
 
@@ -112,29 +140,66 @@ export function NoteEditor({
     );
   };
 
-  const convertBlock = (id: string, type: BlockType) => {
-    fetch(`/api/blocks/${id}`, {
+  const convertBlock = async (
+    id: string,
+    type: BlockType | "database_full",
+    overrides?: BlockOverrides
+  ) => {
+    if (type === "database_full") {
+      await addDatabaseFullPage();
+      return;
+    }
+    const content = applyBlockOverrides(type, emptyBlockContent(type), overrides);
+    const res = await fetch(`/api/blocks/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.block) setBlocks((prev) => prev.map((b) => (b.id === id ? d.block : b)));
-      });
+      body: JSON.stringify({ type, content }),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+    if (d.block) setBlocks((prev) => prev.map((b) => (b.id === id ? d.block : b)));
   };
 
-  const addBlock = async (type: BlockType) => {
+  const addDatabaseFullPage = async () => {
+    const res = await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace: note?.workspace }),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+    await fetch("/api/blocks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageId: d.note.id, type: "database_view" }),
+    });
+    window.location.href = `/notes?id=${d.note.id}`;
+  };
+
+  const addBlock = async (type: BlockType | "database_full", overrides?: BlockOverrides) => {
+    if (type === "database_full") {
+      await addDatabaseFullPage();
+      return;
+    }
     const res = await fetch("/api/blocks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pageId: noteId, type }),
     });
-    if (res.ok) {
-      const d = await res.json();
-      setBlocks((prev) => [...prev, d.block]);
-      setPendingFocusId(d.block.id);
+    if (!res.ok) return;
+    const d = await res.json();
+    let block = d.block as BlockDto;
+    const content = applyBlockOverrides(type, block.content, overrides);
+    if (content !== block.content) {
+      await fetch(`/api/blocks/${block.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      block = { ...block, content };
     }
+    setBlocks((prev) => [...prev, block]);
+    setPendingFocusId(block.id);
   };
 
   /** Enter inside a text/heading block: split off a new text block right after it and focus it. */
@@ -224,7 +289,7 @@ export function NoteEditor({
                 key={b.id}
                 block={b}
                 onChange={(content) => changeContent(b.id, content)}
-                onConvert={(type) => convertBlock(b.id, type)}
+                onConvert={(type, overrides) => convertBlock(b.id, type, overrides)}
                 onDelete={() => deleteBlock(b.id)}
                 onMoveUp={() => moveBlock(i, -1)}
                 onMoveDown={() => moveBlock(i, 1)}
@@ -242,20 +307,30 @@ export function NoteEditor({
             ))}
           </div>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+          <Popover open={addMenuOpen} onOpenChange={setAddMenuOpen}>
+            <PopoverTrigger asChild>
               <Button variant="ghost" size="sm" className="mt-2 text-muted-foreground hover:text-foreground">
                 <Plus className="h-3.5 w-3.5" /> Add block
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              {ADD_MENU.map(({ type, label, icon: Icon }) => (
-                <DropdownMenuItem key={type} onSelect={() => addBlock(type)}>
-                  <Icon className="h-4 w-4" /> {label}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-auto p-0">
+              <SlashMenu
+                onSelect={(type, itemId) => {
+                  const item = SLASH_MENU_GROUPS.flatMap((g) => g.items).find((i) => i.id === itemId);
+                  if (type === "database_full") {
+                    addDatabaseFullPage();
+                    setAddMenuOpen(false);
+                    return;
+                  }
+                  addBlock(type as BlockType, {
+                    contentOverride: item?.contentOverride,
+                    initialViewType: item?.initialViewType,
+                  });
+                  setAddMenuOpen(false);
+                }}
+              />
+            </PopoverContent>
+          </Popover>
         </>
       )}
     </div>

@@ -37,6 +37,7 @@ import { TimelineView } from "@/components/app/timeline-view";
 import { KanbanView } from "@/components/app/kanban-view";
 import { ListView } from "@/components/app/list-view";
 import { TaskDetailDrawer } from "@/components/app/task-detail-drawer";
+import { SlashMenu, SLASH_MENU_GROUPS, type SlashMenuItem } from "@/components/app/slash-menu";
 import { cn, generateUUID, formatBytes } from "@/lib/utils";
 import { uploadBlockFile } from "@/lib/upload-block-file";
 import { WORKSPACES } from "@/lib/workspaces";
@@ -69,13 +70,7 @@ import type {
   VideoBlockContent,
 } from "@/lib/types";
 
-/** Notion-like "/" menu — offered from a text block, since it's already the block you're typing into. */
-const SLASH_OPTIONS: { type: BlockType; label: string; icon: typeof Table2 }[] = [
-  { type: "table", label: "Table", icon: Table2 },
-  { type: "bullet", label: "Bullet List", icon: ListChecks },
-  { type: "heading", label: "Heading", icon: HeadingIcon },
-  { type: "image", label: "Photo / Image", icon: ImageIcon },
-];
+type BlockConvertOverrides = { contentOverride?: Record<string, unknown>; initialViewType?: string };
 
 export function BlockView({
   block,
@@ -95,7 +90,7 @@ export function BlockView({
 }: {
   block: BlockDto;
   onChange: (content: BlockContentUpdater) => void;
-  onConvert?: (type: BlockType) => void;
+  onConvert?: (type: BlockType | "database_full", overrides?: BlockConvertOverrides) => void;
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -235,7 +230,7 @@ export function TextBlockView({
 }: {
   content: TextBlockContent;
   onChange: (c: BlockContentUpdater) => void;
-  onConvert?: (type: BlockType) => void;
+  onConvert?: (type: BlockType | "database_full", overrides?: BlockConvertOverrides) => void;
   onEnter?: () => void;
   onBackspaceEmpty?: () => void;
   registerFocus?: (handle: { focus: () => void } | null) => void;
@@ -244,10 +239,12 @@ export function TextBlockView({
   const ref = React.useRef<HTMLTextAreaElement>(null);
   // "/" at the start of the line opens the menu; text after it filters the options, Notion-style
   const slashQuery = content.text.startsWith("/") ? content.text.slice(1) : null;
-  const options =
+  const options: SlashMenuItem[] =
     slashQuery === null
       ? []
-      : SLASH_OPTIONS.filter((o) => o.label.toLowerCase().includes(slashQuery.toLowerCase()));
+      : SLASH_MENU_GROUPS.flatMap((g) => g.items).filter((o) =>
+          o.label.toLowerCase().includes(slashQuery.toLowerCase())
+        );
   const showMenu = !!onConvert && slashQuery !== null && options.length > 0;
 
   React.useEffect(() => setMenuIndex(0), [slashQuery]);
@@ -260,10 +257,11 @@ export function TextBlockView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const select = (type: BlockType) => {
-    // no need to clear the text first — onConvert replaces the whole block's content,
-    // and doing both would race the debounced save from onChange against the immediate convert
-    onConvert?.(type);
+  const select = (item: SlashMenuItem) => {
+    onConvert?.(item.type as BlockType | "database_full", {
+      contentOverride: item.contentOverride,
+      initialViewType: item.initialViewType,
+    });
   };
 
   return (
@@ -282,7 +280,7 @@ export function TextBlockView({
               setMenuIndex((i) => (i - 1 + options.length) % options.length);
             } else if (e.key === "Enter") {
               e.preventDefault();
-              select(options[menuIndex].type);
+              select(options[menuIndex]);
             } else if (e.key === "Escape") {
               e.preventDefault();
               onChange({ text: "" });
@@ -304,23 +302,17 @@ export function TextBlockView({
         className="min-h-0 resize-none border-0 bg-transparent px-1 py-1 text-sm shadow-none focus-visible:ring-1"
       />
       {showMenu && (
-        <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border bg-popover py-1 shadow-lg">
-          {options.map((opt, i) => (
-            <button
-              key={opt.type}
-              // mousedown (not click) fires before the textarea blurs, so the menu doesn't vanish first
-              onMouseDown={(e) => {
-                e.preventDefault();
-                select(opt.type);
-              }}
-              className={cn(
-                "flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm",
-                i === menuIndex ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"
-              )}
-            >
-              <opt.icon className="h-3.5 w-3.5" /> {opt.label}
-            </button>
-          ))}
+        <div className="absolute left-0 top-full z-20 mt-1">
+          <SlashMenu
+            query={slashQuery ?? ""}
+            activeIndex={menuIndex}
+            onSelect={(type, itemId) => {
+              const item = options.find((o) => o.id === itemId);
+              if (item) select(item);
+              else
+                onConvert?.(type as BlockType | "database_full");
+            }}
+          />
         </div>
       )}
     </div>
