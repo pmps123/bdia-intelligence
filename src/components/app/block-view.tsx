@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowUp,
+  Calendar,
   CalendarRange,
   ChevronDown,
   ChevronRight,
@@ -39,9 +40,8 @@ import { TimelineView } from "@/components/app/timeline-view";
 import { KanbanView } from "@/components/app/kanban-view";
 import { ListView } from "@/components/app/list-view";
 import { TaskDetailDrawer } from "@/components/app/task-detail-drawer";
-import { cn, generateUUID } from "@/lib/utils";
+import { cn, formatBytes, generateUUID } from "@/lib/utils";
 import { uploadBlockFile } from "@/lib/upload-block-file";
-import { WORKSPACES } from "@/lib/workspaces";
 import type {
   BlockContent,
   BlockContentUpdater,
@@ -56,8 +56,6 @@ import type {
   HeadingBlockContent,
   ImageBlockContent,
   LinkPageBlockContent,
-  MentionPageBlockContent,
-  MentionPersonBlockContent,
   NumberedBlockContent,
   PageBlockContent,
   QuoteBlockContent,
@@ -71,7 +69,13 @@ import type {
   VideoBlockContent,
 } from "@/lib/types";
 
-type BlockConvertOverrides = { contentOverride?: Record<string, unknown>; initialViewType?: string };
+/** Notion-like "/" menu — offered from a text block, since it's already the block you're typing into. */
+const SLASH_OPTIONS: { type: BlockType; label: string; icon: typeof Table2 }[] = [
+  { type: "table", label: "Table", icon: Table2 },
+  { type: "bullet", label: "Bullet List", icon: ListChecks },
+  { type: "heading", label: "Heading", icon: HeadingIcon },
+  { type: "image", label: "Photo / Image", icon: ImageIcon },
+];
 
 export function BlockView({
   block,
@@ -87,11 +91,10 @@ export function BlockView({
   isLast,
   workspace,
   pageId,
-  allBlocks,
 }: {
   block: BlockDto;
   onChange: (content: BlockContentUpdater) => void;
-  onConvert?: (type: BlockType | "database_full", overrides?: BlockConvertOverrides) => void;
+  onConvert?: (type: BlockType) => void;
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -107,8 +110,6 @@ export function BlockView({
   workspace?: string;
   /** Current page's id — a Page block's "New sub-page" uses it as the new page's parentId. */
   pageId?: string;
-  /** All blocks on the current page — TOC block needs this to compute headings. */
-  allBlocks?: BlockDto[];
 }) {
   return (
     <div className="group relative flex gap-1.5">
@@ -164,9 +165,6 @@ export function BlockView({
         {(block.type === "table" || block.type === "database_view") && (
           <TableBlockView content={block.content as TableBlockContent} onChange={onChange} />
         )}
-        {block.type === "database_view" && (
-          <TableBlockView content={block.content as TableBlockContent} onChange={onChange} />
-        )}
         {block.type === "toggle" && (
           <ToggleBlockView content={block.content as ToggleBlockContent} onChange={onChange} />
         )}
@@ -192,6 +190,15 @@ export function BlockView({
         {block.type === "link_page" && (
           <LinkPageBlockView content={block.content as LinkPageBlockContent} onChange={onChange} workspace={workspace} />
         )}
+        {block.type === "video" && (
+          <VideoBlockView content={block.content as VideoBlockContent} onChange={onChange} />
+        )}
+        {block.type === "file" && (
+          <FileBlockView content={block.content as FileBlockContent} onChange={onChange} />
+        )}
+        {block.type === "code" && (
+          <CodeBlockView content={block.content as CodeBlockContent} onChange={onChange} />
+        )}
       </div>
 
       <button
@@ -215,7 +222,7 @@ export function TextBlockView({
 }: {
   content: TextBlockContent;
   onChange: (c: BlockContentUpdater) => void;
-  onConvert?: (type: BlockType | "database_full", overrides?: BlockConvertOverrides) => void;
+  onConvert?: (type: BlockType) => void;
   onEnter?: () => void;
   onBackspaceEmpty?: () => void;
   registerFocus?: (handle: { focus: () => void } | null) => void;
@@ -224,12 +231,10 @@ export function TextBlockView({
   const ref = React.useRef<HTMLTextAreaElement>(null);
   // "/" at the start of the line opens the menu; text after it filters the options, Notion-style
   const slashQuery = content.text.startsWith("/") ? content.text.slice(1) : null;
-  const options: SlashMenuItem[] =
+  const options =
     slashQuery === null
       ? []
-      : SLASH_MENU_GROUPS.flatMap((g) => g.items).filter((o) =>
-        o.label.toLowerCase().includes(slashQuery.toLowerCase())
-      );
+      : SLASH_OPTIONS.filter((o) => o.label.toLowerCase().includes(slashQuery.toLowerCase()));
   const showMenu = !!onConvert && slashQuery !== null && options.length > 0;
 
   React.useEffect(() => setMenuIndex(0), [slashQuery]);
@@ -242,11 +247,10 @@ export function TextBlockView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const select = (item: SlashMenuItem) => {
-    onConvert?.(item.type as BlockType | "database_full", {
-      contentOverride: item.contentOverride,
-      initialViewType: item.initialViewType,
-    });
+  const select = (type: BlockType) => {
+    // no need to clear the text first — onConvert replaces the whole block's content,
+    // and doing both would race the debounced save from onChange against the immediate convert
+    onConvert?.(type);
   };
 
   return (
@@ -265,7 +269,7 @@ export function TextBlockView({
               setMenuIndex((i) => (i - 1 + options.length) % options.length);
             } else if (e.key === "Enter") {
               e.preventDefault();
-              select(options[menuIndex]);
+              select(options[menuIndex].type);
             } else if (e.key === "Escape") {
               e.preventDefault();
               onChange({ text: "" });
@@ -287,17 +291,23 @@ export function TextBlockView({
         className="min-h-0 resize-none border-0 bg-transparent px-1 py-1 text-sm shadow-none focus-visible:ring-1"
       />
       {showMenu && (
-        <div className="absolute left-0 top-full z-20 mt-1">
-          <SlashMenu
-            query={slashQuery ?? ""}
-            activeIndex={menuIndex}
-            onSelect={(type, itemId) => {
-              const item = options.find((o) => o.id === itemId);
-              if (item) select(item);
-              else
-                onConvert?.(type as BlockType | "database_full");
-            }}
-          />
+        <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border bg-popover py-1 shadow-lg">
+          {options.map((opt, i) => (
+            <button
+              key={opt.type}
+              // mousedown (not click) fires before the textarea blurs, so the menu doesn't vanish first
+              onMouseDown={(e) => {
+                e.preventDefault();
+                select(opt.type);
+              }}
+              className={cn(
+                "flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm",
+                i === menuIndex ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"
+              )}
+            >
+              <opt.icon className="h-3.5 w-3.5" /> {opt.label}
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -636,68 +646,6 @@ export function ToggleBlockView({ content, onChange }: { content: ToggleBlockCon
 
 const DEFAULT_VIEW: TableViewDef = { id: "table-view", name: "Table View", type: "table" };
 
-export function GalleryView({ columns, rows }: { columns: TableColumnDef[]; rows: TableRowDef[] }) {
-  const titleCol = columns[0];
-  return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-      {rows.map((row) => (
-        <div key={row.id} className="rounded-lg border p-3">
-          <div className="truncate text-sm font-medium">{row.cells[titleCol?.id] || "Untitled"}</div>
-          {columns.slice(1, 4).map((c) => (
-            <div key={c.id} className="mt-1 truncate text-xs text-muted-foreground">{c.name}: {row.cells[c.id] || "—"}</div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export function DashboardView({ columns, rows }: { columns: TableColumnDef[]; rows: TableRowDef[] }) {
-  const numericCols = columns.filter((c) => c.type === "number");
-  return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <div className="rounded-lg border p-3">
-        <div className="text-xs text-muted-foreground">Total rows</div>
-        <div className="mt-1 font-display text-xl font-semibold">{rows.length}</div>
-      </div>
-      {numericCols.map((c) => {
-        const sum = rows.reduce((s, r) => s + (Number(r.cells[c.id]) || 0), 0);
-        return (
-          <div key={c.id} className="rounded-lg border p-3">
-            <div className="text-xs text-muted-foreground">{c.name} (sum)</div>
-            <div className="mt-1 font-display text-xl font-semibold">{sum}</div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-export function CalendarView({ columns, rows, dateColumnId }: { columns: TableColumnDef[]; rows: TableRowDef[]; dateColumnId?: string }) {
-  const titleCol = columns[0];
-  if (!dateColumnId) return <div className="p-3 text-sm text-muted-foreground">Add a Date column to use Calendar view.</div>;
-  const byDate = new Map<string, TableRowDef[]>();
-  for (const row of rows) {
-    const d = row.cells[dateColumnId];
-    if (!d) continue;
-    byDate.set(d, [...(byDate.get(d) ?? []), row]);
-  }
-  const dates = [...byDate.keys()].sort();
-  return (
-    <div className="space-y-2">
-      {dates.length === 0 && <div className="p-3 text-sm text-muted-foreground">No dated rows yet.</div>}
-      {dates.map((d) => (
-        <div key={d} className="rounded-lg border p-2">
-          <div className="text-xs font-semibold text-muted-foreground">{d}</div>
-          {byDate.get(d)!.map((row) => (
-            <div key={row.id} className="truncate text-sm">{row.cells[titleCol?.id] || "Untitled"}</div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /** "+" Add view — Table is one click; Timeline needs date column config; Board needs group-by column. */
 function AddViewMenu({
   dateColumns,
@@ -730,7 +678,6 @@ function AddViewMenu({
     setStep("main");
     setPendingCalendar(false);
     setOpen(false);
-    setPendingCalendar(false);
   };
 
   return (
@@ -761,6 +708,18 @@ function AddViewMenu({
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
             >
               <KanbanIcon className="h-4 w-4" /> Board
+            </button>
+            <button
+              onClick={() => { onAdd({ id: generateUUID(), name: "Gallery", type: "gallery" }); reset(); }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+            >
+              <LayoutGrid className="h-4 w-4" /> Gallery
+            </button>
+            <button
+              onClick={() => { onAdd({ id: generateUUID(), name: "Dashboard", type: "dashboard" }); reset(); }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+            >
+              <LayoutDashboard className="h-4 w-4" /> Dashboard
             </button>
             <button
               onClick={openTimelinePicker}
@@ -812,14 +771,16 @@ function AddViewMenu({
                 ))}
               </select>
             </label>
-            <label className="block text-xs">
-              End
-              <select value={endId} onChange={(e) => setEndId(e.target.value)} className="mt-0.5 h-7 w-full rounded border bg-transparent px-1.5 text-sm">
-                {dateColumns.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </label>
+            {pendingCalendar ? null : (
+              <label className="block text-xs">
+                End
+                <select value={endId} onChange={(e) => setEndId(e.target.value)} className="mt-0.5 h-7 w-full rounded border bg-transparent px-1.5 text-sm">
+                  {dateColumns.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <Button
               size="sm"
               className="h-7 w-full text-xs"
@@ -833,7 +794,7 @@ function AddViewMenu({
                 reset();
               }}
             >
-              Create timeline view
+              {pendingCalendar ? "Create calendar view" : "Create timeline view"}
             </Button>
           </div>
         )}
@@ -1024,7 +985,7 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
                 v.id === activeView.id ? "text-accent-foreground" : "text-muted-foreground"
               )}
             >
-              {v.type === "timeline" ? <CalendarRange className="h-3.5 w-3.5" /> : v.type === "board" ? <KanbanIcon className="h-3.5 w-3.5" /> : v.type === "list" ? <ListIcon className="h-3.5 w-3.5" /> : v.type === "gallery" ? <LayoutGrid className="h-3.5 w-3.5" /> : v.type === "dashboard" ? <LayoutDashboard className="h-3.5 w-3.5" /> : v.type === "calendar" ? <Calendar className="h-3.5 w-3.5" /> : <Table2 className="h-3.5 w-3.5" />}
+              {v.type === "timeline" ? <CalendarRange className="h-3.5 w-3.5" /> : v.type === "board" ? <KanbanIcon className="h-3.5 w-3.5" /> : v.type === "list" ? <ListIcon className="h-3.5 w-3.5" /> : <Table2 className="h-3.5 w-3.5" />}
               {v.name}
             </button>
             {views.length > 1 && (
@@ -1076,12 +1037,6 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
           onAddRow={() => patchActiveTable({ rows: [...activeTable.rows, { id: generateUUID(), cells: {} }] })}
           onRemoveRow={(id) => patchActiveTable({ rows: activeTable.rows.filter((r) => r.id !== id) })}
         />
-      ) : activeView.type === "gallery" ? (
-        <GalleryView columns={activeTable.columns} rows={activeTable.rows} />
-      ) : activeView.type === "dashboard" ? (
-        <DashboardView columns={activeTable.columns} rows={activeTable.rows} />
-      ) : activeView.type === "calendar" ? (
-        <CalendarView columns={activeTable.columns} rows={activeTable.rows} dateColumnId={activeView.startColumnId} />
       ) : (
         <TableEditor
           columns={activeTable.columns}
@@ -1321,257 +1276,6 @@ export function LinkPageBlockView({ content, onChange, workspace }: { content: L
       <PopoverContent className="w-64 p-1">
         {pages.map((p) => (
           <button key={p.id} onClick={() => { onChange({ pageId: p.id }); setOpen(false); }} className="block w-full truncate rounded px-2 py-1.5 text-left text-sm hover:bg-accent cursor-pointer">
-            {p.title || "Untitled"}
-          </button>
-        ))}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-export function VideoBlockView({ content, onChange }: { content: VideoBlockContent; onChange: (c: BlockContentUpdater) => void }) {
-  const fileRef = React.useRef<HTMLInputElement>(null);
-
-  const onFile = async (file: File) => {
-    try {
-      const d = await uploadBlockFile(file);
-      onChange({ ...content, url: d.url });
-    } catch {
-      // fail silently: upload error, old URL persists, user can retry or paste manually
-    }
-  };
-
-  return (
-    <div className="space-y-2">
-      {content.url ? (
-        <video src={content.url} controls className="max-h-80 w-full rounded-lg border" />
-      ) : (
-        <div className="flex h-28 items-center justify-center rounded-lg border-2 border-dashed border-border/60 text-sm text-muted-foreground">No video yet</div>
-      )}
-      <div className="flex items-center gap-2">
-        <Input value={content.url} onChange={(e) => onChange({ ...content, url: e.target.value })} placeholder="Paste a video URL…" className="h-8 flex-1 text-xs" />
-        <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => fileRef.current?.click()}>
-          <Upload className="h-3.5 w-3.5" /> Upload
-        </Button>
-        <input ref={fileRef} type="file" accept="video/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
-      </div>
-    </div>
-  );
-}
-
-export function FileBlockView({ content, onChange }: { content: FileBlockContent; onChange: (c: BlockContentUpdater) => void }) {
-  const fileRef = React.useRef<HTMLInputElement>(null);
-
-  const onFile = async (file: File) => {
-    try {
-      const d = await uploadBlockFile(file);
-      onChange({ url: d.url, name: d.name, size: d.size });
-    } catch {
-      // fail silently: upload error, old URL persists, user can retry
-    }
-  };
-
-  return content.url ? (
-    <a href={content.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-accent">
-      <FileIcon className="h-4 w-4 text-muted-foreground" /> {content.name} <span className="text-xs text-muted-foreground">({formatBytes(content.size)})</span>
-    </a>
-  ) : (
-    <>
-      <button onClick={() => fileRef.current?.click()} className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50 hover:text-primary cursor-pointer">
-        <Upload className="h-4 w-4" /> Upload a file
-      </button>
-      <input ref={fileRef} type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
-    </>
-  );
-}
-
-const CODE_LANGUAGES = ["text", "javascript", "typescript", "python", "sql", "json", "bash"];
-
-export function CodeBlockView({ content, onChange }: { content: CodeBlockContent; onChange: (c: BlockContentUpdater) => void }) {
-  return (
-    <div className="overflow-hidden rounded-lg border bg-muted/40">
-      <div className="flex items-center justify-between border-b px-2 py-1">
-        <select
-          value={content.language}
-          onChange={(e) => onChange({ ...content, language: e.target.value })}
-          className="bg-transparent text-xs text-muted-foreground cursor-pointer"
-        >
-          {CODE_LANGUAGES.map((lang) => (
-            <option key={lang} value={lang}>{lang}</option>
-          ))}
-        </select>
-      </div>
-      <Textarea
-        value={content.code}
-        onChange={(e) => onChange({ ...content, code: e.target.value })}
-        placeholder="Type code…"
-        rows={4}
-        className="resize-y border-0 bg-transparent px-3 py-2 font-mono text-xs shadow-none focus-visible:ring-0"
-      />
-    </div>
-  );
-}
-
-export function ColumnsBlockView({ content, onChange }: { content: ColumnsBlockContent; onChange: (c: BlockContentUpdater) => void }) {
-  const addToColumn = (colIndex: number) => {
-    onChange((prev) => {
-      const p = prev as ColumnsBlockContent;
-      const child: BlockDto = { id: generateUUID(), workspace: "", order: p.columns[colIndex].length, type: "text", content: { text: "" } };
-      const columns = p.columns.map((col, i) => (i === colIndex ? [...col, child] : col));
-      return { ...p, columns };
-    });
-  };
-
-  const updateChild = (colIndex: number, childIndex: number, next: BlockContentUpdater) => {
-    onChange((prev) => {
-      const p = prev as ColumnsBlockContent;
-      const col = p.columns[colIndex];
-      const child = col[childIndex];
-      const resolved = typeof next === "function" ? next(child.content) : next;
-      const newCol = col.map((c, i) => (i === childIndex ? { ...c, content: resolved } : c));
-      const columns = p.columns.map((c, i) => (i === colIndex ? newCol : c));
-      return { ...p, columns };
-    });
-  };
-
-  const removeChild = (colIndex: number, childIndex: number) => {
-    onChange((prev) => {
-      const p = prev as ColumnsBlockContent;
-      const columns = p.columns.map((c, i) => (i === colIndex ? c.filter((_, ci) => ci !== childIndex) : c));
-      return { ...p, columns };
-    });
-  };
-
-  return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${content.columnCount}, minmax(0, 1fr))` }}>
-      {content.columns.map((col, colIndex) => (
-        <div key={colIndex} className="space-y-1 border-l pl-3 first:border-l-0 first:pl-0">
-          {col.map((child, childIndex) => (
-            <BlockView
-              key={child.id}
-              block={child}
-              onChange={(c) => updateChild(colIndex, childIndex, c)}
-              onDelete={() => removeChild(colIndex, childIndex)}
-              onMoveUp={() => { }}
-              onMoveDown={() => { }}
-              isFirst
-              isLast
-            />
-          ))}
-          <button onClick={() => addToColumn(colIndex)} className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer">
-            <Plus className="h-3.5 w-3.5" /> Add
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export function ChartBlockView({ content, onChange }: { content: ChartBlockContent; onChange: (c: BlockContentUpdater) => void }) {
-  const max = Math.max(1, ...content.data.map((d) => d.value));
-  const setData = (next: typeof content.data) => onChange({ ...content, data: next });
-
-  return (
-    <div className="space-y-3 rounded-lg border p-3">
-      <select value={content.chartType} onChange={(e) => onChange({ ...content, chartType: e.target.value as ChartBlockContent["chartType"] })} className="h-7 rounded border bg-transparent px-2 text-xs cursor-pointer">
-        <option value="bar">Bar</option>
-        <option value="line">Line</option>
-        <option value="pie">Pie</option>
-      </select>
-
-      {content.chartType !== "line" && (
-        <div className="flex h-32 items-end gap-2">
-          {content.data.map((d, i) => (
-            <div key={i} className="flex flex-1 flex-col items-center gap-1">
-              <div className="w-full rounded-t bg-primary/70" style={{ height: `${(d.value / max) * 100}%` }} />
-              <span className="truncate text-[10px] text-muted-foreground">{d.label}</span>
-            </div>
-          ))}
-        </div>
-      )}
-      {content.chartType === "line" && (
-        <svg viewBox={`0 0 ${Math.max(1, content.data.length - 1) * 40} 100`} className="h-32 w-full" preserveAspectRatio="none">
-          <polyline
-            fill="none"
-            stroke="var(--primary)"
-            strokeWidth="2"
-            points={content.data.map((d, i) => `${i * 40},${100 - (d.value / max) * 100}`).join(" ")}
-          />
-        </svg>
-      )}
-
-      <div className="space-y-1">
-        {content.data.map((d, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <Input value={d.label} onChange={(e) => setData(content.data.map((x, xi) => (xi === i ? { ...x, label: e.target.value } : x)))} placeholder="Label" className="h-7 flex-1 text-xs" />
-            <Input type="number" value={d.value} onChange={(e) => setData(content.data.map((x, xi) => (xi === i ? { ...x, value: Number(e.target.value) } : x)))} placeholder="Value" className="h-7 w-20 text-xs" />
-            <button onClick={() => setData(content.data.filter((_, xi) => xi !== i))} className="shrink-0 text-muted-foreground hover:text-status-bad cursor-pointer">
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ))}
-        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setData([...content.data, { label: "", value: 0 }])}>
-          <Plus className="h-3 w-3 mr-1" /> Add data point
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-export function TocBlockView({ allBlocks }: { allBlocks: BlockDto[] }) {
-  const headings = allBlocks
-    .filter((b) => b.type === "heading")
-    .map((b) => b.content as HeadingBlockContent);
-
-  if (headings.length === 0) {
-    return <div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">No headings on this page yet.</div>;
-  }
-  return (
-    <div className="space-y-1 rounded-lg border p-3">
-      {headings.map((h, i) => (
-        <div key={i} style={{ paddingLeft: `${(h.level - 1) * 12}px` }} className="truncate text-sm text-muted-foreground hover:text-primary">
-          {h.text || "Untitled heading"}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export function MentionPersonBlockView({ content, onChange }: { content: MentionPersonBlockContent; onChange: (c: BlockContentUpdater) => void }) {
-  const [open, setOpen] = React.useState(!content.personId);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger className="inline-flex items-center gap-1.5 rounded-full border bg-accent/50 px-2.5 py-1 text-xs font-medium cursor-pointer">
-        <AtSign className="h-3 w-3" /> {content.label || "Mention someone…"}
-      </PopoverTrigger>
-      <PopoverContent className="w-48 p-1">
-        {WORKSPACES.map((w) => (
-          <button key={w.id} onClick={() => { onChange({ personId: w.id, label: w.name }); setOpen(false); }} className="block w-full truncate rounded px-2 py-1.5 text-left text-sm hover:bg-accent cursor-pointer">
-            {w.name}
-          </button>
-        ))}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-export function MentionPageBlockView({ content, onChange, workspace }: { content: MentionPageBlockContent; onChange: (c: BlockContentUpdater) => void; workspace?: string }) {
-  const [pages, setPages] = React.useState<{ id: string; title: string }[]>([]);
-  const [open, setOpen] = React.useState(!content.pageId);
-
-  React.useEffect(() => {
-    if (!workspace) return;
-    fetch(`/api/notes?ws=${workspace}`).then((r) => r.json()).then((d) => setPages(d.notes ?? []));
-  }, [workspace]);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger className="inline-flex items-center gap-1.5 rounded-full border bg-accent/50 px-2.5 py-1 text-xs font-medium cursor-pointer">
-        <FileText className="h-3 w-3" /> {content.label || "Mention a page…"}
-      </PopoverTrigger>
-      <PopoverContent className="w-64 p-1">
-        {pages.map((p) => (
-          <button key={p.id} onClick={() => { onChange({ pageId: p.id, label: p.title || "Untitled" }); setOpen(false); }} className="block w-full truncate rounded px-2 py-1.5 text-left text-sm hover:bg-accent cursor-pointer">
             {p.title || "Untitled"}
           </button>
         ))}
