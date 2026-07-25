@@ -87,6 +87,7 @@ export function BlockView({
   isLast,
   workspace,
   pageId,
+  allBlocks,
 }: {
   block: BlockDto;
   onChange: (content: BlockContentUpdater) => void;
@@ -106,6 +107,8 @@ export function BlockView({
   workspace?: string;
   /** Current page's id — a Page block's "New sub-page" uses it as the new page's parentId. */
   pageId?: string;
+  /** All blocks on the current page — TOC block needs this to compute headings. */
+  allBlocks?: BlockDto[];
 }) {
   return (
     <div className="group relative flex gap-1.5">
@@ -198,6 +201,7 @@ export function BlockView({
         {block.type === "chart" && (
           <ChartBlockView content={block.content as ChartBlockContent} onChange={onChange} />
         )}
+        {block.type === "toc" && <TocBlockView allBlocks={allBlocks ?? []} />}
       </div>
 
       <button
@@ -1366,6 +1370,25 @@ export function ChartBlockView({ content, onChange }: { content: ChartBlockConte
           <Plus className="h-3 w-3 mr-1" /> Add data point
         </Button>
       </div>
+    </div>
+  );
+}
+
+export function TocBlockView({ allBlocks }: { allBlocks: BlockDto[] }) {
+  const headings = allBlocks
+    .filter((b) => b.type === "heading")
+    .map((b) => b.content as HeadingBlockContent);
+
+  if (headings.length === 0) {
+    return <div className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">No headings on this page yet.</div>;
+  }
+  return (
+    <div className="space-y-1 rounded-lg border p-3">
+      {headings.map((h, i) => (
+        <div key={i} style={{ paddingLeft: `${(h.level - 1) * 12}px` }} className="truncate text-sm text-muted-foreground hover:text-primary">
+          {h.text || "Untitled heading"}
+        </div>
+      ))}
     </div>
   );
 }
