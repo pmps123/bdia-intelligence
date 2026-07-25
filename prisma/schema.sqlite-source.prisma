@@ -1,0 +1,241 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/sqlite-source-client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("SQLITE_MIGRATION_URL")
+}
+
+model Project {
+  id                String   @id @default(cuid())
+  name              String
+  workspace         String   @default("rafli")
+  priceSource       String   @default("PRICE_LIST")
+  step              String   @default("internal")
+  internalUploadId  String?
+  vendorUploadId    String?
+  internalDatasetId String?
+  vendorDatasetId   String?
+  sessionId         String?
+  validationRunId   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Upload {
+  id          String      @id @default(cuid())
+  fileName    String
+  fileType    String
+  fileSize    Int
+  storagePath String
+  createdAt   DateTime    @default(now())
+  worksheets  Worksheet[]
+  datasets    Dataset[]
+}
+
+model Worksheet {
+  id          String @id @default(cuid())
+  uploadId    String
+  upload      Upload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  name        String
+  sheetIndex  Int
+  rowCount    Int
+  columnCount Int
+  headers     String
+  preview     String
+}
+
+model Dataset {
+  id             String    @id @default(cuid())
+  name           String
+  kind           String
+  vendorName     String?
+  uploadId       String
+  upload         Upload    @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  worksheetName  String
+  mapping        String
+  cleaningReport String?
+  rowCount       Int       @default(0)
+  createdAt      DateTime  @default(now())
+  rows           DataRow[]
+}
+
+model DataRow {
+  id           String  @id @default(cuid())
+  datasetId    String
+  dataset      Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  rowIndex     Int
+  data         String
+  nameRaw      String?
+  nameNorm     String?
+  code         String?
+  variant      String?
+  brand        String?
+  category     String?
+  tokens       String?
+  prices       String?
+  qty          Float?
+  qtyMin       Float?
+  qtyMax       Float?
+  qtyRuleLabel String?
+
+  @@index([datasetId])
+  @@index([nameNorm])
+}
+
+model MatchSession {
+  id                String               @id @default(cuid())
+  name              String
+  vendorDatasetId   String
+  internalDatasetId String
+  status            String               @default("PENDING")
+  stats             String?
+  createdAt         DateTime             @default(now())
+  results           MatchResult[]
+  validations       PriceValidationRun[]
+}
+
+model MatchResult {
+  id            String       @id @default(cuid())
+  sessionId     String
+  session       MatchSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  vendorRowId   String
+  internalRowId String?
+  score         Float        @default(0)
+  confidence    Float        @default(0)
+  status        String
+  source        String       @default("ENGINE")
+  candidates    String?
+  detail        String?
+
+  @@index([sessionId])
+  @@index([status])
+}
+
+model MasterMapping {
+  id            String   @id @default(cuid())
+  vendorName    String   @default("")
+  vendorKey     String
+  vendorLabel   String
+  internalKey   String
+  internalLabel String
+  internalCode  String?
+  usageCount    Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@unique([vendorName, vendorKey])
+}
+
+model PriceValidationRun {
+  id                 String                @id @default(cuid())
+  name               String
+  sessionId          String
+  session            MatchSession          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  referenceDatasetId String
+  vendorPriceField   String
+  internalPriceField String
+  tolerancePct       Float                 @default(0)
+  status             String                @default("COMPLETED")
+  stats              String?
+  createdAt          DateTime              @default(now())
+  items              PriceValidationItem[]
+}
+
+model PriceValidationItem {
+  id            String             @id @default(cuid())
+  runId         String
+  run           PriceValidationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  matchResultId String?
+  vendorRowId   String?
+  internalRowId String?
+  vendorLabel   String
+  internalLabel String
+  vendorPrice   Float?
+  internalPrice Float?
+  diff          Float?
+  diffPct       Float?
+  status        String
+
+  @@index([runId])
+}
+
+model TransformRun {
+  id        String   @id @default(cuid())
+  pipeline  String
+  status    String   @default("RUNNING")
+  log       String   @default("")
+  files     String   @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SalesmanRow {
+  id            String   @id @default(cuid())
+  workspace     String
+  bulan         String
+  branch        String
+  division      String
+  legacyCode    String
+  newCode       String?
+  salesName     String?
+  nik           String?
+  tanggalMasuk  String?
+  tanggalKeluar String?
+  aktif         String   @default("Aktif")
+  needsReview   Boolean  @default(false)
+  source        String   @default("IMPORT")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([workspace, bulan, legacyCode])
+  @@index([workspace, bulan])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  workspace String
+  title     String   @default("Untitled")
+  type      String
+  content   String
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspace])
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  workspace String
+  order     Int      @default(0)
+  type      String
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([workspace])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  workspace String
+  role      String
+  content   String
+  model     String?
+  createdAt DateTime @default(now())
+
+  @@index([workspace, createdAt])
+}
+
+model Job {
+  id        String   @id @default(cuid())
+  type      String
+  status    String   @default("RUNNING")
+  progress  Float    @default(0)
+  message   String   @default("")
+  result    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
