@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowUp,
+  Calendar,
   CalendarRange,
   ChevronDown,
   ChevronRight,
@@ -13,6 +14,8 @@ import {
   GripVertical,
   Heading as HeadingIcon,
   Image as ImageIcon,
+  LayoutDashboard,
+  LayoutGrid,
   Link2 as Link2Icon,
   ListChecks,
   Plus,
@@ -52,6 +55,8 @@ import type {
   QuoteBlockContent,
   SubTableDef,
   TableBlockContent,
+  TableColumnDef,
+  TableRowDef,
   TableViewDef,
   TextBlockContent,
   ToggleBlockContent,
@@ -152,6 +157,9 @@ export function BlockView({
           <BulletBlockView content={block.content as BulletBlockContent} onChange={onChange} onEmptyBackspaceOnly={onBackspaceEmpty} />
         )}
         {block.type === "table" && (
+          <TableBlockView content={block.content as TableBlockContent} onChange={onChange} />
+        )}
+        {block.type === "database_view" && (
           <TableBlockView content={block.content as TableBlockContent} onChange={onChange} />
         )}
         {block.type === "toggle" && (
@@ -629,6 +637,68 @@ export function ToggleBlockView({ content, onChange }: { content: ToggleBlockCon
 
 const DEFAULT_VIEW: TableViewDef = { id: "table-view", name: "Table View", type: "table" };
 
+export function GalleryView({ columns, rows }: { columns: TableColumnDef[]; rows: TableRowDef[] }) {
+  const titleCol = columns[0];
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {rows.map((row) => (
+        <div key={row.id} className="rounded-lg border p-3">
+          <div className="truncate text-sm font-medium">{row.cells[titleCol?.id] || "Untitled"}</div>
+          {columns.slice(1, 4).map((c) => (
+            <div key={c.id} className="mt-1 truncate text-xs text-muted-foreground">{c.name}: {row.cells[c.id] || "—"}</div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function DashboardView({ columns, rows }: { columns: TableColumnDef[]; rows: TableRowDef[] }) {
+  const numericCols = columns.filter((c) => c.type === "number");
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="rounded-lg border p-3">
+        <div className="text-xs text-muted-foreground">Total rows</div>
+        <div className="mt-1 font-display text-xl font-semibold">{rows.length}</div>
+      </div>
+      {numericCols.map((c) => {
+        const sum = rows.reduce((s, r) => s + (Number(r.cells[c.id]) || 0), 0);
+        return (
+          <div key={c.id} className="rounded-lg border p-3">
+            <div className="text-xs text-muted-foreground">{c.name} (sum)</div>
+            <div className="mt-1 font-display text-xl font-semibold">{sum}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function CalendarView({ columns, rows, dateColumnId }: { columns: TableColumnDef[]; rows: TableRowDef[]; dateColumnId?: string }) {
+  const titleCol = columns[0];
+  if (!dateColumnId) return <div className="p-3 text-sm text-muted-foreground">Add a Date column to use Calendar view.</div>;
+  const byDate = new Map<string, TableRowDef[]>();
+  for (const row of rows) {
+    const d = row.cells[dateColumnId];
+    if (!d) continue;
+    byDate.set(d, [...(byDate.get(d) ?? []), row]);
+  }
+  const dates = [...byDate.keys()].sort();
+  return (
+    <div className="space-y-2">
+      {dates.length === 0 && <div className="p-3 text-sm text-muted-foreground">No dated rows yet.</div>}
+      {dates.map((d) => (
+        <div key={d} className="rounded-lg border p-2">
+          <div className="text-xs font-semibold text-muted-foreground">{d}</div>
+          {byDate.get(d)!.map((row) => (
+            <div key={row.id} className="truncate text-sm">{row.cells[titleCol?.id] || "Untitled"}</div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** "+" Add view — Table is one click; Timeline needs date column config; Board needs group-by column. */
 function AddViewMenu({
   dateColumns,
@@ -644,6 +714,7 @@ function AddViewMenu({
   const [startId, setStartId] = React.useState("");
   const [endId, setEndId] = React.useState("");
   const [groupById, setGroupById] = React.useState("");
+  const [pendingCalendar, setPendingCalendar] = React.useState(false);
 
   const openTimelinePicker = () => {
     setStartId(dateColumns[0]?.id ?? "");
@@ -659,6 +730,7 @@ function AddViewMenu({
   const reset = () => {
     setStep("main");
     setOpen(false);
+    setPendingCalendar(false);
   };
 
   return (
@@ -689,6 +761,26 @@ function AddViewMenu({
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
             >
               <KanbanIcon className="h-4 w-4" /> Board
+            </button>
+            <button
+              onClick={() => { onAdd({ id: generateUUID(), name: "Gallery", type: "gallery" }); reset(); }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+            >
+              <LayoutGrid className="h-4 w-4" /> Gallery
+            </button>
+            <button
+              onClick={() => { onAdd({ id: generateUUID(), name: "Dashboard", type: "dashboard" }); reset(); }}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent cursor-pointer"
+            >
+              <LayoutDashboard className="h-4 w-4" /> Dashboard
+            </button>
+            <button
+              onClick={() => { setPendingCalendar(true); openTimelinePicker(); }}
+              disabled={dateColumns.length === 0}
+              title={dateColumns.length === 0 ? "Add a Date column first" : undefined}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+            >
+              <Calendar className="h-4 w-4" /> Calendar
             </button>
             <button
               onClick={openTimelinePicker}
@@ -732,20 +824,30 @@ function AddViewMenu({
                 ))}
               </select>
             </label>
-            <label className="block text-xs">
-              End
-              <select value={endId} onChange={(e) => setEndId(e.target.value)} className="mt-0.5 h-7 w-full rounded border bg-transparent px-1.5 text-sm">
-                {dateColumns.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </label>
+            {!pendingCalendar && (
+              <label className="block text-xs">
+                End
+                <select value={endId} onChange={(e) => setEndId(e.target.value)} className="mt-0.5 h-7 w-full rounded border bg-transparent px-1.5 text-sm">
+                  {dateColumns.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <Button
               size="sm"
               className="h-7 w-full text-xs"
-              onClick={() => { onAdd({ id: generateUUID(), name: "Timeline", type: "timeline", startColumnId: startId, endColumnId: endId }); reset(); }}
+              onClick={() => {
+                if (pendingCalendar) {
+                  onAdd({ id: generateUUID(), name: "Calendar", type: "calendar", startColumnId: startId });
+                  setPendingCalendar(false);
+                } else {
+                  onAdd({ id: generateUUID(), name: "Timeline", type: "timeline", startColumnId: startId, endColumnId: endId });
+                }
+                reset();
+              }}
             >
-              Create timeline view
+              Create {pendingCalendar ? "calendar" : "timeline"} view
             </Button>
           </div>
         )}
@@ -874,7 +976,7 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
                 v.id === activeView.id ? "text-accent-foreground" : "text-muted-foreground"
               )}
             >
-              {v.type === "timeline" ? <CalendarRange className="h-3.5 w-3.5" /> : v.type === "board" ? <KanbanIcon className="h-3.5 w-3.5" /> : v.type === "list" ? <ListIcon className="h-3.5 w-3.5" /> : <Table2 className="h-3.5 w-3.5" />}
+              {v.type === "timeline" ? <CalendarRange className="h-3.5 w-3.5" /> : v.type === "board" ? <KanbanIcon className="h-3.5 w-3.5" /> : v.type === "list" ? <ListIcon className="h-3.5 w-3.5" /> : v.type === "gallery" ? <LayoutGrid className="h-3.5 w-3.5" /> : v.type === "dashboard" ? <LayoutDashboard className="h-3.5 w-3.5" /> : v.type === "calendar" ? <Calendar className="h-3.5 w-3.5" /> : <Table2 className="h-3.5 w-3.5" />}
               {v.name}
             </button>
             {views.length > 1 && (
@@ -920,6 +1022,12 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
           onAddRow={() => patchActiveTable({ rows: [...activeTable.rows, { id: generateUUID(), cells: {} }] })}
           onRemoveRow={(id) => patchActiveTable({ rows: activeTable.rows.filter((r) => r.id !== id) })}
         />
+      ) : activeView.type === "gallery" ? (
+        <GalleryView columns={activeTable.columns} rows={activeTable.rows} />
+      ) : activeView.type === "dashboard" ? (
+        <DashboardView columns={activeTable.columns} rows={activeTable.rows} />
+      ) : activeView.type === "calendar" ? (
+        <CalendarView columns={activeTable.columns} rows={activeTable.rows} dateColumnId={activeView.startColumnId} />
       ) : (
         <TableEditor
           columns={activeTable.columns}

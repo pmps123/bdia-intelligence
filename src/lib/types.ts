@@ -175,7 +175,7 @@ export interface TableRowDef {
 export interface TableViewDef {
   id: string;
   name: string;
-  type: "table" | "timeline" | "board" | "list";
+  type: "table" | "timeline" | "board" | "list" | "gallery" | "dashboard" | "calendar";
   /** Timeline only: which "date" columns a row's bar spans. A single-date column can fill both. */
   startColumnId?: string;
   endColumnId?: string;
