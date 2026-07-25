@@ -137,6 +137,22 @@ export function NoteEditor({
     }
   };
 
+  const addDatabaseFullPage = async () => {
+    const res = await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace: note?.workspace }),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+    await fetch("/api/blocks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageId: d.note.id, type: "database_view" }),
+    });
+    window.location.href = `/notes?id=${d.note.id}`;
+  };
+
   /** Enter inside a text/heading block: split off a new text block right after it and focus it. */
   const insertBlockAfter = async (index: number) => {
     const res = await fetch("/api/blocks", {
