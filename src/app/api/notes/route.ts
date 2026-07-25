@@ -12,11 +12,11 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { workspace } = await req.json().catch(() => ({}));
+  const { workspace, parentId } = await req.json().catch(() => ({}));
   const ws = workspace || "rafli";
-  const last = await prisma.page.findFirst({ where: { workspace: ws }, orderBy: { order: "desc" } });
+  const last = await prisma.page.findFirst({ where: { workspace: ws, parentId: parentId ?? null }, orderBy: { order: "desc" } });
   const page = await prisma.page.create({
-    data: { workspace: ws, order: (last?.order ?? -1) + 1, title: "Untitled" },
+    data: { workspace: ws, parentId: parentId ?? null, order: (last?.order ?? -1) + 1, title: "Untitled" },
   });
   return NextResponse.json({ note: { ...page, content: {} } });
 }

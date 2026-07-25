@@ -329,14 +329,14 @@ describe("PageBlockView", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("clicking New sub-page POSTs /api/notes with the workspace, then calls onChange with the returned page's id", async () => {
+  it("clicking New sub-page POSTs /api/notes with the workspace and current page's id as parentId, then calls onChange with the returned page's id", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ note: { id: "new-page-1", workspace: "rafli", title: "Untitled" } }),
+      json: async () => ({ note: { id: "new-page-1", workspace: "rafli", parentId: "page-parent-1", title: "Untitled" } }),
     });
     global.fetch = mockFetch;
     const onChange = vi.fn();
-    render(<PageBlockView content={{ pageId: "" }} onChange={onChange} workspace="rafli" />);
+    render(<PageBlockView content={{ pageId: "" }} onChange={onChange} workspace="rafli" pageId="page-parent-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /new sub-page/i }));
 
@@ -346,7 +346,9 @@ describe("PageBlockView", () => {
     const [url, options] = mockFetch.mock.calls[0];
     expect(url).toBe("/api/notes");
     expect(options.method).toBe("POST");
-    expect(JSON.parse(options.body)).toEqual({ workspace: "rafli" });
+    // this is the regression this task fixes: the sub-page must be created as a genuine child
+    // of the current page (parentId), not a top-level page.
+    expect(JSON.parse(options.body)).toEqual({ workspace: "rafli", parentId: "page-parent-1" });
   });
 
   it("once content.pageId is set, fetches /api/notes?ws=<workspace>, finds the matching page, and renders its title as a link", async () => {

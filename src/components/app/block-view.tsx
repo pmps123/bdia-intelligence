@@ -75,6 +75,7 @@ export function BlockView({
   isFirst,
   isLast,
   workspace,
+  pageId,
 }: {
   block: BlockDto;
   onChange: (content: BlockContentUpdater) => void;
@@ -92,6 +93,8 @@ export function BlockView({
   isLast: boolean;
   /** Current page's workspace — Page/Link-to-page blocks need it to create/list sibling pages. */
   workspace?: string;
+  /** Current page's id — a Page block's "New sub-page" uses it as the new page's parentId. */
+  pageId?: string;
 }) {
   return (
     <div className="group relative flex gap-1.5">
@@ -161,7 +164,7 @@ export function BlockView({
           <CalloutBlockView content={block.content as CalloutBlockContent} onChange={onChange} />
         )}
         {block.type === "page" && (
-          <PageBlockView content={block.content as PageBlockContent} onChange={onChange} workspace={workspace} />
+          <PageBlockView content={block.content as PageBlockContent} onChange={onChange} workspace={workspace} pageId={pageId} />
         )}
         {block.type === "link_page" && (
           <LinkPageBlockView content={block.content as LinkPageBlockContent} onChange={onChange} workspace={workspace} />
@@ -985,7 +988,7 @@ export function ImageBlockView({ content, onChange }: { content: ImageBlockConte
   );
 }
 
-export function PageBlockView({ content, onChange, workspace }: { content: PageBlockContent; onChange: (c: BlockContentUpdater) => void; workspace?: string }) {
+export function PageBlockView({ content, onChange, workspace, pageId }: { content: PageBlockContent; onChange: (c: BlockContentUpdater) => void; workspace?: string; pageId?: string }) {
   const [title, setTitle] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -1001,7 +1004,7 @@ export function PageBlockView({ content, onChange, workspace }: { content: PageB
     const res = await fetch("/api/notes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace }),
+      body: JSON.stringify({ workspace, parentId: pageId }),
     });
     if (!res.ok) return;
     const d = await res.json();
