@@ -195,6 +195,9 @@ export function BlockView({
         {block.type === "columns" && (
           <ColumnsBlockView content={block.content as ColumnsBlockContent} onChange={onChange} />
         )}
+        {block.type === "chart" && (
+          <ChartBlockView content={block.content as ChartBlockContent} onChange={onChange} />
+        )}
       </div>
 
       <button
@@ -1312,6 +1315,57 @@ export function ColumnsBlockView({ content, onChange }: { content: ColumnsBlockC
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+export function ChartBlockView({ content, onChange }: { content: ChartBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const max = Math.max(1, ...content.data.map((d) => d.value));
+  const setData = (next: typeof content.data) => onChange({ ...content, data: next });
+
+  return (
+    <div className="space-y-3 rounded-lg border p-3">
+      <select value={content.chartType} onChange={(e) => onChange({ ...content, chartType: e.target.value as ChartBlockContent["chartType"] })} className="h-7 rounded border bg-transparent px-2 text-xs cursor-pointer">
+        <option value="bar">Bar</option>
+        <option value="line">Line</option>
+        <option value="pie">Pie</option>
+      </select>
+
+      {content.chartType !== "line" && (
+        <div className="flex h-32 items-end gap-2">
+          {content.data.map((d, i) => (
+            <div key={i} className="flex flex-1 flex-col items-center gap-1">
+              <div className="w-full rounded-t bg-primary/70" style={{ height: `${(d.value / max) * 100}%` }} />
+              <span className="truncate text-[10px] text-muted-foreground">{d.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {content.chartType === "line" && (
+        <svg viewBox={`0 0 ${Math.max(1, content.data.length - 1) * 40} 100`} className="h-32 w-full" preserveAspectRatio="none">
+          <polyline
+            fill="none"
+            stroke="var(--primary)"
+            strokeWidth="2"
+            points={content.data.map((d, i) => `${i * 40},${100 - (d.value / max) * 100}`).join(" ")}
+          />
+        </svg>
+      )}
+
+      <div className="space-y-1">
+        {content.data.map((d, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <Input value={d.label} onChange={(e) => setData(content.data.map((x, xi) => (xi === i ? { ...x, label: e.target.value } : x)))} placeholder="Label" className="h-7 flex-1 text-xs" />
+            <Input type="number" value={d.value} onChange={(e) => setData(content.data.map((x, xi) => (xi === i ? { ...x, value: Number(e.target.value) } : x)))} placeholder="Value" className="h-7 w-20 text-xs" />
+            <button onClick={() => setData(content.data.filter((_, xi) => xi !== i))} className="shrink-0 text-muted-foreground hover:text-status-bad cursor-pointer">
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setData([...content.data, { label: "", value: 0 }])}>
+          <Plus className="h-3 w-3 mr-1" /> Add data point
+        </Button>
+      </div>
     </div>
   );
 }
