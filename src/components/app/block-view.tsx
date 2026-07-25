@@ -25,7 +25,11 @@ import {
   X,
   Kanban as KanbanIcon,
   List as ListIcon,
+  PieChart as PieChartIcon,
+  BarChart3,
+  LineChart as LineChartIcon,
 } from "lucide-react";
+import { BarChart, Bar, PieChart, Pie, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -45,6 +49,7 @@ import type {
   BlockType,
   BulletBlockContent,
   CalloutBlockContent,
+  ChartBlockContent,
   CodeBlockContent,
   ColumnsBlockContent,
   FileBlockContent,
@@ -165,6 +170,9 @@ export function BlockView({
         )}
         {block.type === "columns" && (
           <ColumnsBlockView content={block.content as ColumnsBlockContent} onChange={onChange} />
+        )}
+        {block.type === "chart" && (
+          <ChartBlockView content={block.content as ChartBlockContent} onChange={onChange} />
         )}
         {block.type === "image" && (
           <ImageBlockView content={block.content as ImageBlockContent} onChange={onChange} />
@@ -1322,11 +1330,78 @@ export function ColumnsBlockView({ content, onChange }: { content: ColumnsBlockC
               isLast
             />
           ))}
+        <div key={colIndex} className="space-y-1 border-l pl-3 first:border-l-0 first:pl-0">
+          {col.map((child, childIndex) => (
+            <BlockView
+              key={child.id}
+              block={child}
+              onChange={(c) => updateChild(colIndex, childIndex, c)}
+              onDelete={() => removeChild(colIndex, childIndex)}
+              onMoveUp={() => {}}
+              onMoveDown={() => {}}
+              isFirst
+              isLast
+            />
+          ))}
           <button onClick={() => addToColumn(colIndex)} className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer">
             <Plus className="h-3.5 w-3.5" /> Add
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4"];
+
+export function ChartBlockView({ content, onChange }: { content: ChartBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  const chartType = content.chartType || "bar";
+  const data = content.data || [{ name: "A", value: 400 }, { name: "B", value: 300 }, { name: "C", value: 300 }, { name: "D", value: 200 }];
+
+  const setType = (t: "bar" | "line" | "pie") => onChange({ ...content, chartType: t, data });
+
+  return (
+    <div className="rounded-lg border bg-card p-4 shadow-sm">
+      <div className="mb-4 flex items-center gap-2 border-b pb-2">
+        <button onClick={() => setType("bar")} className={cn("flex items-center gap-1.5 rounded px-2 py-1 text-xs cursor-pointer", chartType === "bar" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50")}>
+          <BarChart3 className="h-3.5 w-3.5" /> Bar
+        </button>
+        <button onClick={() => setType("line")} className={cn("flex items-center gap-1.5 rounded px-2 py-1 text-xs cursor-pointer", chartType === "line" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50")}>
+          <LineChartIcon className="h-3.5 w-3.5" /> Line
+        </button>
+        <button onClick={() => setType("pie")} className={cn("flex items-center gap-1.5 rounded px-2 py-1 text-xs cursor-pointer", chartType === "pie" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50")}>
+          <PieChartIcon className="h-3.5 w-3.5" /> Pie
+        </button>
+      </div>
+
+      <div className="h-64 w-full text-xs">
+        <ResponsiveContainer width="100%" height="100%">
+          {chartType === "bar" ? (
+            <BarChart data={data} margin={{ left: -20, right: 10 }}>
+              <XAxis dataKey="name" stroke="#888888" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis stroke="#888888" fontSize={11} tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", fontSize: 12, backgroundColor: "var(--background)" }} />
+              <Bar dataKey="value" fill="var(--primary)" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          ) : chartType === "line" ? (
+            <LineChart data={data} margin={{ left: -20, right: 10 }}>
+              <XAxis dataKey="name" stroke="#888888" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis stroke="#888888" fontSize={11} tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", fontSize: 12, backgroundColor: "var(--background)" }} />
+              <Line type="monotone" dataKey="value" stroke="var(--primary)" strokeWidth={2} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+            </LineChart>
+          ) : (
+            <PieChart>
+              <Pie data={data} cx="50%" cy="50%" outerRadius={80} fill="#8884d8" dataKey="value" label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                {data.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", fontSize: 12, backgroundColor: "var(--background)" }} />
+            </PieChart>
+          )}
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }

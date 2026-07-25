@@ -141,6 +141,16 @@ export interface ImageBlockContent {
   caption: string;
 }
 
+export interface ColumnsBlockContent {
+  columnCount: number;
+  columns: BlockDto[][];
+}
+
+export interface ChartBlockContent {
+  chartType: "bar" | "line" | "pie";
+  data: { name: string; value: number }[];
+}
+
 export interface BulletItem {
   id: string;
   text: string;
