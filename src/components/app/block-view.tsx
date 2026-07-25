@@ -28,6 +28,7 @@ import { KanbanView } from "@/components/app/kanban-view";
 import { ListView } from "@/components/app/list-view";
 import { TaskDetailDrawer } from "@/components/app/task-detail-drawer";
 import { cn, generateUUID } from "@/lib/utils";
+import { uploadBlockFile } from "@/lib/upload-block-file";
 import type {
   BlockContent,
   BlockContentUpdater,
@@ -704,10 +705,13 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
 export function ImageBlockView({ content, onChange }: { content: ImageBlockContent; onChange: (c: BlockContentUpdater) => void }) {
   const fileRef = React.useRef<HTMLInputElement>(null);
 
-  const onFile = (file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => onChange({ ...content, url: String(reader.result) });
-    reader.readAsDataURL(file);
+  const onFile = async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/blocks/upload", { method: "POST", body: form });
+    if (!res.ok) return;
+    const d = await res.json();
+    onChange({ ...content, url: d.url });
   };
 
   return (
