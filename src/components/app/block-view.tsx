@@ -42,6 +42,7 @@ import type {
   BlockType,
   BulletBlockContent,
   CalloutBlockContent,
+  CodeBlockContent,
   FileBlockContent,
   HeadingBlockContent,
   ImageBlockContent,
@@ -177,6 +178,9 @@ export function BlockView({
         )}
         {block.type === "file" && (
           <FileBlockView content={block.content as FileBlockContent} onChange={onChange} />
+        )}
+        {block.type === "code" && (
+          <CodeBlockView content={block.content as CodeBlockContent} onChange={onChange} />
         )}
       </div>
 
@@ -1114,5 +1118,32 @@ export function FileBlockView({ content, onChange }: { content: FileBlockContent
       </button>
       <input ref={fileRef} type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); e.target.value = ""; }} />
     </>
+  );
+}
+
+const CODE_LANGUAGES = ["text", "javascript", "typescript", "python", "sql", "json", "bash"];
+
+export function CodeBlockView({ content, onChange }: { content: CodeBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  return (
+    <div className="overflow-hidden rounded-lg border bg-muted/40">
+      <div className="flex items-center justify-between border-b px-2 py-1">
+        <select
+          value={content.language}
+          onChange={(e) => onChange({ ...content, language: e.target.value })}
+          className="bg-transparent text-xs text-muted-foreground cursor-pointer"
+        >
+          {CODE_LANGUAGES.map((lang) => (
+            <option key={lang} value={lang}>{lang}</option>
+          ))}
+        </select>
+      </div>
+      <Textarea
+        value={content.code}
+        onChange={(e) => onChange({ ...content, code: e.target.value })}
+        placeholder="Type code…"
+        rows={4}
+        className="resize-y border-0 bg-transparent px-3 py-2 font-mono text-xs shadow-none focus-visible:ring-0"
+      />
+    </div>
   );
 }
