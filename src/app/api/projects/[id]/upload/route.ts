@@ -36,45 +36,49 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ error: "No data rows detected in this file" }, { status: 400 });
   }
 
-  await mkdir(STORAGE_DIR, { recursive: true });
-  const storagePath = path.join(STORAGE_DIR, `${Date.now()}-${file.name}`);
-  await writeFile(storagePath, buffer);
+  try {
+    await mkdir(STORAGE_DIR, { recursive: true });
+    const storagePath = path.join(STORAGE_DIR, `${Date.now()}-${file.name}`);
+    await writeFile(storagePath, buffer);
 
-  const upload = await prisma.upload.create({
-    data: {
-      fileName: file.name,
-      fileType: ext,
-      fileSize: buffer.length,
-      storagePath,
-      worksheets: {
-        create: parsed.sheets.map((s) => ({
-          name: s.name,
-          sheetIndex: s.index,
-          rowCount: s.rowCount,
-          columnCount: s.columnCount,
-          headers: JSON.stringify(s.headers),
-          preview: JSON.stringify(s.rows.slice(0, 100)),
-        })),
+    const upload = await prisma.upload.create({
+      data: {
+        fileName: file.name,
+        fileType: ext,
+        fileSize: buffer.length,
+        storagePath,
+        worksheets: {
+          create: parsed.sheets.map((s) => ({
+            name: s.name,
+            sheetIndex: s.index,
+            rowCount: s.rowCount,
+            columnCount: s.columnCount,
+            headers: JSON.stringify(s.headers),
+            preview: JSON.stringify(s.rows.slice(0, 100)),
+          })),
+        },
       },
-    },
-  });
+    });
 
-  // replacing a file resets everything downstream of it
-  const old = side === "internal" ? project.internalUploadId : project.vendorUploadId;
-  if (old) await prisma.upload.delete({ where: { id: old } }).catch(() => null);
-  if (project.sessionId) await prisma.matchSession.delete({ where: { id: project.sessionId } }).catch(() => null);
+    // replacing a file resets everything downstream of it
+    const old = side === "internal" ? project.internalUploadId : project.vendorUploadId;
+    if (old) await prisma.upload.delete({ where: { id: old } }).catch(() => null);
+    if (project.sessionId) await prisma.matchSession.delete({ where: { id: project.sessionId } }).catch(() => null);
 
-  await prisma.project.update({
-    where: { id },
-    data: {
-      [side === "internal" ? "internalUploadId" : "vendorUploadId"]: upload.id,
-      sessionId: null,
-      validationRunId: null,
-      internalDatasetId: side === "internal" ? null : project.internalDatasetId,
-      vendorDatasetId: side === "vendor" ? null : project.vendorDatasetId,
-      step: side === "internal" ? "vendor" : "detect",
-    },
-  });
+    await prisma.project.update({
+      where: { id },
+      data: {
+        [side === "internal" ? "internalUploadId" : "vendorUploadId"]: upload.id,
+        sessionId: null,
+        validationRunId: null,
+        internalDatasetId: side === "internal" ? null : project.internalDatasetId,
+        vendorDatasetId: side === "vendor" ? null : project.vendorDatasetId,
+        step: side === "internal" ? "vendor" : "detect",
+      },
+    });
 
-  return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return NextResponse.json({ error: `Upload failed: ${e instanceof Error ? e.message : e}` }, { status: 500 });
+  }
 }
