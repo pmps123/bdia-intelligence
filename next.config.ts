@@ -5,6 +5,14 @@ import path from "path";
 const nextConfig: NextConfig = {
   serverExternalPackages: ["@prisma/client", "prisma", "exceljs", "xlsx", "pdf-parse", "jspdf", "pdf-lib", "tesseract.js", "sharp"],
   eslint: { ignoreDuringBuilds: true },
+  // tesseract.js-core picks its .wasm binary at runtime via a computed fs path (feature-detected
+  // SIMD support), not a string literal require — Vercel's build-time file tracer can't follow
+  // that, so the .wasm never made it into the deployed function and OCR'd PDFs 500'd there ("ENOENT
+  // ... tesseract-core-relaxedsimd.wasm") despite working locally. Force every variant along for
+  // the two routes that actually parse uploaded files.
+  outputFileTracingIncludes: {
+    "/api/projects/**/*": ["./node_modules/tesseract.js-core/**/*.wasm*"],
+  },
   experimental: {
     // Tree-shake lucide-react so only used icons are bundled.
     // On a network share this meaningfully cuts initial JS parse time.
