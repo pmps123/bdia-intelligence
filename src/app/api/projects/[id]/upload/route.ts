@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { parseUploadedFile } from "@/lib/parse/file-parser";
-import { mkdir, writeFile } from "fs/promises";
-import path from "path";
+import { supabaseAdmin, UPLOADS_BUCKET } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
-const STORAGE_DIR = path.join(process.cwd(), "storage", "uploads");
 const ALLOWED = ["xlsx", "xls", "csv", "pdf"];
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -37,9 +35,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   try {
-    await mkdir(STORAGE_DIR, { recursive: true });
-    const storagePath = path.join(STORAGE_DIR, `${Date.now()}-${file.name}`);
-    await writeFile(storagePath, buffer);
+    const storagePath = `${Date.now()}-${file.name}`;
+    const { error } = await supabaseAdmin.storage.from(UPLOADS_BUCKET).upload(storagePath, buffer, {
+      contentType: file.type || "application/octet-stream",
+    });
+    if (error) throw error;
 
     const upload = await prisma.upload.create({
       data: {

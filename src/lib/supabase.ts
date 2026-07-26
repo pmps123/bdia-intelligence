@@ -8,3 +8,4 @@ export const supabaseAdmin = createClient(
 );
 
 export const NOTE_ATTACHMENTS_BUCKET = "note-attachments";
+export const UPLOADS_BUCKET = "uploads";

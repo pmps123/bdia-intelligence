@@ -5,7 +5,7 @@ import { tokenize, splitSlashVariants } from "@/lib/engine/tokens";
 import { parseQtyRule } from "@/lib/engine/qty-rules";
 import type { ColumnMapping } from "@/lib/types";
 import { PRICE_FIELDS } from "@/lib/types";
-import { readFile } from "fs/promises";
+import { supabaseAdmin, UPLOADS_BUCKET } from "@/lib/supabase";
 
 /**
  * Build a dataset from an uploaded worksheet + the user's column mapping.
@@ -21,7 +21,9 @@ export async function createDatasetFromUpload(opts: {
   jobId?: string;
 }): Promise<string> {
   const upload = await prisma.upload.findUniqueOrThrow({ where: { id: opts.uploadId } });
-  const buffer = await readFile(upload.storagePath);
+  const { data, error } = await supabaseAdmin.storage.from(UPLOADS_BUCKET).download(upload.storagePath);
+  if (error) throw error;
+  const buffer = Buffer.from(await data.arrayBuffer());
   const parsed = await parseUploadedFile(buffer, upload.fileName);
   const sheet = parsed.sheets.find((s) => s.name === opts.worksheetName);
   if (!sheet) throw new Error(`Worksheet "${opts.worksheetName}" not found in ${upload.fileName}`);
