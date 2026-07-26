@@ -141,10 +141,10 @@ export interface ImageBlockContent {
   caption: string;
 }
 
-export interface ColumnsBlockContent {
-  columnCount: number;
-  columns: BlockDto[][];
-}
+// export interface ColumnsBlockContent {
+//   columnCount: number;
+//   columns: BlockDto[][];
+// }
 
 export interface ChartBlockContent {
   chartType: "bar" | "line" | "pie";
@@ -274,11 +274,6 @@ export interface FileBlockContent {
 export interface CodeBlockContent {
   code: string;
   language: string;
-}
-
-export interface ChartBlockContent {
-  chartType: "bar" | "line" | "pie";
-  data: { label: string; value: number }[];
 }
 
 export type TocBlockContent = Record<string, never>;
