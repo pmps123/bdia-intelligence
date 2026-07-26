@@ -2,24 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { safeJson } from "@/lib/utils";
 import { emptyBlockContent, type BlockType } from "@/lib/types";
-
 const BLOCK_TYPES: BlockType[] = [
   "text", "heading", "bullet", "table", "image",
   "numbered", "todo", "toggle",
   "page", "callout", "quote", "divider", "link_page",
   "video", "file", "code",
-  "database_view",
+  "database_view", "simple_table",
   "chart", "toc", "columns",
   "mention_person", "mention_page",
 ];
-
 export async function GET(req: NextRequest) {
   const pageId = req.nextUrl.searchParams.get("pageId");
   if (!pageId) return NextResponse.json({ error: "pageId is required" }, { status: 400 });
   const blocks = await prisma.block.findMany({ where: { pageId }, orderBy: { order: "asc" } });
   return NextResponse.json({ blocks: blocks.map((b) => ({ ...b, content: safeJson(b.content, {}) })) });
 }
-
 export async function POST(req: NextRequest) {
   const { pageId, type } = await req.json().catch(() => ({}));
   if (!pageId) return NextResponse.json({ error: "pageId is required" }, { status: 400 });

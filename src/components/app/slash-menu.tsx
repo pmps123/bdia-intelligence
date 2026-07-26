@@ -85,14 +85,16 @@ export const SLASH_MENU_GROUPS: SlashMenuGroup[] = [
   {
     name: "Database Views",
     items: [
-      { id: "db_table", label: "Table view", type: "database_view", icon: Table, description: "Display a database as a table.", initialViewType: "table" },
+      // Plain grid table — no view tabs, no multi-table switcher, just columns you can add to.
+      // The other items below stay as the full multi-view database_view block for now.
+      { id: "db_table", label: "Table view", type: "simple_table", icon: Table, description: "A simple table you can add columns to." },
       { id: "db_board", label: "Board view", type: "database_view", icon: Kanban, description: "Display a database as a Kanban board.", initialViewType: "board" },
       { id: "db_gallery", label: "Gallery view", type: "database_view", icon: LayoutGrid, description: "Display a database as a visual gallery.", initialViewType: "gallery" },
       { id: "db_list", label: "List view", type: "database_view", icon: ListTodo, description: "Display a database as a compact list.", initialViewType: "list" },
       { id: "db_dashboard", label: "Dashboard view", type: "database_view", icon: LayoutDashboard, description: "Display a database as a metric dashboard.", initialViewType: "dashboard" },
       { id: "db_calendar", label: "Calendar view", type: "database_view", icon: Calendar, description: "Display a database as a calendar.", initialViewType: "calendar" },
       { id: "db_timeline", label: "Timeline view", type: "database_view", icon: Clock, description: "Display a database as a Gantt chart.", initialViewType: "timeline" },
-      { id: "db_full", label: "Database Full Page", type: "database_full", icon: Database, description: "Create a full page database." },
+      { id: "db_view", label: "Database view", type: "database_view", icon: Database, description: "Create an inline database view." },
     ],
   },
   {
@@ -138,29 +140,29 @@ export function SlashMenu({ onSelect, query = "", activeIndex }: SlashMenuProps)
       <Command shouldFilter={false} className="border-none max-h-96">
         <CommandList className="max-h-[350px] overflow-y-auto thin-scroll">
           <CommandEmpty>No matching blocks.</CommandEmpty>
-          
+
           {filteredGroups.map((group) => (
             <CommandGroup key={group.name} heading={group.name} className="px-1 py-2 text-muted-foreground">
               {group.items.map((item) => {
                 const index = flatIndex++;
                 const selected = activeIndex === index;
                 return (
-                <CommandItem
-                  key={item.id}
-                  value={item.label}
-                  onSelect={() => onSelect(item.type, item.id)}
-                  className={`flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer aria-selected:bg-accent aria-selected:text-accent-foreground${selected ? " bg-accent text-accent-foreground" : ""}`}
-                >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded border bg-background text-foreground/70 shadow-sm">
-                    <item.icon className="h-5 w-5" />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-medium leading-none text-foreground">{item.label}</span>
-                    {item.description && (
-                      <span className="text-[11px] text-muted-foreground mt-1 line-clamp-1">{item.description}</span>
-                    )}
-                  </div>
-                </CommandItem>
+                  <CommandItem
+                    key={item.id}
+                    value={item.label}
+                    onSelect={() => onSelect(item.type, item.id)}
+                    className={`flex items-center gap-3 rounded-md px-2 py-1.5 cursor-pointer aria-selected:bg-accent aria-selected:text-accent-foreground${selected ? " bg-accent text-accent-foreground" : ""}`}
+                  >
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded border bg-background text-foreground/70 shadow-sm">
+                      <item.icon className="h-5 w-5" />
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium leading-none text-foreground">{item.label}</span>
+                      {item.description && (
+                        <span className="text-[11px] text-muted-foreground mt-1 line-clamp-1">{item.description}</span>
+                      )}
+                    </div>
+                  </CommandItem>
                 );
               })}
             </CommandGroup>

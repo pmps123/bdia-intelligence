@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Clock, AlignLeft } from "lucide-react";
+// Tambahkan Maximize2 untuk ikon "Open"
+import { Clock, AlignLeft, Maximize2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +14,8 @@ interface TaskDetailDrawerProps {
   columns: EditableColumn[];
   onClose: () => void;
   onCellChange: (rowId: string, colId: string, value: string) => void;
+  // Prop baru untuk menangani aksi Buka sebagai Halaman Penuh
+  onOpenAsPage?: (rowId: string) => void;
 }
 
 export function TaskDetailDrawer({
@@ -20,6 +23,7 @@ export function TaskDetailDrawer({
   columns,
   onClose,
   onCellChange,
+  onOpenAsPage, // Ekstrak prop di sini
 }: TaskDetailDrawerProps) {
   if (!row) return null;
 
@@ -29,8 +33,8 @@ export function TaskDetailDrawer({
   return (
     <Dialog open={!!row} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-2xl sm:max-w-2xl overflow-y-auto max-h-[85vh] p-6">
-        <DialogHeader className="flex flex-row items-center justify-between border-b pb-4">
-          <DialogTitle className="text-xl font-semibold flex items-center gap-2">
+        <DialogHeader className="flex flex-row items-center justify-between border-b pb-4 gap-4">
+          <DialogTitle className="text-xl font-semibold flex items-center gap-2 flex-1">
             <Input
               value={titleVal}
               placeholder="Task Title..."
@@ -38,6 +42,21 @@ export function TaskDetailDrawer({
               className="text-lg font-semibold border-0 bg-transparent px-1 focus-visible:ring-1"
             />
           </DialogTitle>
+          {/* Tombol Open as Page persis seperti Notion */}
+          {onOpenAsPage && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                onOpenAsPage(row.id);
+                onClose(); // Tutup drawer modal saat beralih ke halaman penuh
+              }}
+              className="flex items-center gap-1.5 h-8 text-xs shrink-0"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+              Open
+            </Button>
+          )}
         </DialogHeader>
 
         {/* Property Grid */}

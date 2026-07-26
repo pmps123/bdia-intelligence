@@ -13,6 +13,7 @@ import {
   Trash2,
   Type as TypeIcon,
   X,
+  Maximize2, // <-- Ditambahkan untuk ikon Open
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -203,6 +204,7 @@ export function TableEditor({
   onAddRow,
   onRemoveRow,
   onCellChange,
+  onOpenRow, // <-- Properti baru untuk menangkap aksi "Open"
 }: {
   columns: EditableColumn[];
   rows: EditableRow[];
@@ -215,6 +217,8 @@ export function TableEditor({
   onRemoveRow?: (id: string) => void;
   /** Fired (in addition to onChangeRows) with the precise field that changed — use for per-field autosave instead of diffing. */
   onCellChange?: (rowId: string, colId: string, value: string) => void;
+  /** Fungsi baru untuk membuka laci baris (drawer) */
+  onOpenRow?: (row: EditableRow) => void;
 }) {
   const addRow = () => (onAddRow ? onAddRow() : onChangeRows([...rows, newRow ? newRow() : { id: generateUUID(), cells: {} }]));
   const removeRow = (id: string) => {
@@ -424,13 +428,30 @@ export function TableEditor({
                     );
                   }
 
+                  const isFirstCol = col.id === columns[0]?.id;
+
                   return (
-                    <TableCell key={col.id}>
+                    <TableCell key={col.id} className="relative group/cell">
                       <Input
                         value={value}
                         onChange={(e) => setCell(row.id, col.id, e.target.value)}
-                        className="h-8 border-0 bg-transparent px-1 shadow-none focus-visible:ring-1"
+                        className={cn(
+                          "h-8 border-0 bg-transparent px-1 shadow-none focus-visible:ring-1",
+                          // Berikan jarak padding kanan supaya teks tidak tertutup tombol "Open"
+                          isFirstCol && onOpenRow && "pr-16"
+                        )}
                       />
+                      {/* Tombol Open Notion-style: Muncul hanya saat di-hover dan hanya di kolom pertama */}
+                      {isFirstCol && onOpenRow && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => onOpenRow(row)}
+                          className="absolute right-1 top-1/2 -translate-y-1/2 h-6 px-2 text-[10px] opacity-0 group-hover/cell:opacity-100 transition-opacity z-10 cursor-pointer shadow-sm hover:bg-accent"
+                        >
+                          <Maximize2 className="w-3 h-3 mr-1" /> Open
+                        </Button>
+                      )}
                     </TableCell>
                   );
                 })}

@@ -128,7 +128,7 @@ export type BlockType =
   | "numbered" | "todo" | "toggle"
   | "page" | "callout" | "quote" | "divider" | "link_page"
   | "video" | "file" | "code"
-  | "database_view"
+  | "database_view" | "simple_table"
   | "chart" | "toc" | "columns"
   | "mention_person" | "mention_page";
 
@@ -209,6 +209,15 @@ export interface TableBlockContent {
   /** Notion "database view"-style tab switcher — set when a block holds more than one table. */
   tables?: SubTableDef[];
   activeTableId?: string;
+}
+
+/** A plain, single grid table — no view tabs, no multi-table switcher, no "Add Table" button.
+ *  For content tables like a feature-comparison grid, distinct from the full "database_view"
+ *  block (which supports Table/Board/Gallery/List/Dashboard/Calendar/Timeline views over the
+ *  same rows). Shares TableColumnDef/TableRowDef so it renders through the same TableEditor. */
+export interface SimpleTableBlockContent {
+  columns: TableColumnDef[];
+  rows: TableRowDef[];
 }
 
 export interface HeadingBlockContent {
@@ -300,6 +309,7 @@ export type BlockContent =
   | NumberedBlockContent
   | ToggleBlockContent
   | TableBlockContent
+  | SimpleTableBlockContent
   | ImageBlockContent
   | PageBlockContent
   | CalloutBlockContent
@@ -334,6 +344,7 @@ export const emptyBlockContent = (type: BlockType): BlockContent => {
       return { text: "", children: [] };
     case "table":
     case "database_view":
+    case "simple_table":
       return { columns: [{ id: generateUUID(), name: "Column 1" }], rows: [] };
     case "image":
       return { url: "", caption: "" };

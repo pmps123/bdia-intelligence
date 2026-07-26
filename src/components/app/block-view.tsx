@@ -36,13 +36,14 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TableEditor, type EditableRow } from "@/components/app/table-editor";
+import { SlashMenu, SLASH_MENU_GROUPS, type SlashMenuItem } from "@/components/app/slash-menu";
 import { TimelineView } from "@/components/app/timeline-view";
 import { KanbanView } from "@/components/app/kanban-view";
 import { ListView } from "@/components/app/list-view";
 import { TaskDetailDrawer } from "@/components/app/task-detail-drawer";
 import { cn, formatBytes, generateUUID } from "@/lib/utils";
 import { uploadBlockFile } from "@/lib/upload-block-file";
-import type {
+import {
   BlockContent,
   BlockContentUpdater,
   BlockDto,
@@ -59,6 +60,7 @@ import type {
   NumberedBlockContent,
   PageBlockContent,
   QuoteBlockContent,
+  SimpleTableBlockContent,
   SubTableDef,
   TableBlockContent,
   TableColumnDef,
@@ -67,15 +69,8 @@ import type {
   TextBlockContent,
   ToggleBlockContent,
   VideoBlockContent,
+  emptyBlockContent,
 } from "@/lib/types";
-
-/** Notion-like "/" menu — offered from a text block, since it's already the block you're typing into. */
-const SLASH_OPTIONS: { type: BlockType; label: string; icon: typeof Table2 }[] = [
-  { type: "table", label: "Table", icon: Table2 },
-  { type: "bullet", label: "Bullet List", icon: ListChecks },
-  { type: "heading", label: "Heading", icon: HeadingIcon },
-  { type: "image", label: "Photo / Image", icon: ImageIcon },
-];
 
 export function BlockView({
   block,
@@ -94,7 +89,7 @@ export function BlockView({
 }: {
   block: BlockDto;
   onChange: (content: BlockContentUpdater) => void;
-  onConvert?: (type: BlockType) => void;
+  onConvert?: (type: BlockType | "database_full", overrides?: { contentOverride?: Partial<BlockContent>; initialViewType?: string }) => void;
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -110,6 +105,9 @@ export function BlockView({
   workspace?: string;
   /** Current page's id — a Page block's "New sub-page" uses it as the new page's parentId. */
   pageId?: string;
+  /** All blocks on the current page — available for block types that need sibling context
+   *  (e.g. a future mention/reference block resolving another block on the same page). */
+  allBlocks?: BlockDto[];
 }) {
   return (
     <div className="group relative flex gap-1.5">
@@ -165,11 +163,14 @@ export function BlockView({
         {(block.type === "table" || block.type === "database_view") && (
           <TableBlockView content={block.content as TableBlockContent} onChange={onChange} />
         )}
+        {block.type === "simple_table" && (
+          <SimpleTableBlockView content={block.content as SimpleTableBlockContent} onChange={onChange} />
+        )}
         {block.type === "toggle" && (
           <ToggleBlockView content={block.content as ToggleBlockContent} onChange={onChange} />
         )}
         {block.type === "columns" && (
-          <ColumnsBlockView content={block.content as ColumnsBlockContent} onChange={onChange} />
+          <ColumnsBlockView content={block.content as ColumnsBlockContent} onChange={onChange} workspace={workspace} pageId={pageId} />
         )}
         {block.type === "chart" && (
           <ChartBlockView content={block.content as ChartBlockContent} onChange={onChange} />
@@ -222,20 +223,24 @@ export function TextBlockView({
 }: {
   content: TextBlockContent;
   onChange: (c: BlockContentUpdater) => void;
-  onConvert?: (type: BlockType) => void;
+  onConvert?: (type: BlockType | "database_full", overrides?: { contentOverride?: Partial<BlockContent>; initialViewType?: string }) => void;
   onEnter?: () => void;
   onBackspaceEmpty?: () => void;
   registerFocus?: (handle: { focus: () => void } | null) => void;
 }) {
   const [menuIndex, setMenuIndex] = React.useState(0);
   const ref = React.useRef<HTMLTextAreaElement>(null);
-  // "/" at the start of the line opens the menu; text after it filters the options, Notion-style
+  // "/" at the start of the line opens the menu; text after it filters the options, Notion-style.
+  // Reuses the exact same SLASH_MENU_GROUPS as the "Add block" button, so every block type
+  // (including Columns 2/3/4, database views, etc.) is reachable from inline "/" too — not just
+  // the handful this component used to hardcode on its own.
   const slashQuery = content.text.startsWith("/") ? content.text.slice(1) : null;
-  const options =
-    slashQuery === null
-      ? []
-      : SLASH_OPTIONS.filter((o) => o.label.toLowerCase().includes(slashQuery.toLowerCase()));
-  const showMenu = !!onConvert && slashQuery !== null && options.length > 0;
+  const filteredItems = React.useMemo<SlashMenuItem[]>(() => {
+    if (slashQuery === null) return [];
+    const q = slashQuery.toLowerCase();
+    return SLASH_MENU_GROUPS.flatMap((g) => g.items).filter((item) => !q || item.label.toLowerCase().includes(q));
+  }, [slashQuery]);
+  const showMenu = !!onConvert && slashQuery !== null && filteredItems.length > 0;
 
   React.useEffect(() => setMenuIndex(0), [slashQuery]);
   // layout effect, not a passive one: the parent's own layout effect re-focuses a just-created
@@ -247,10 +252,13 @@ export function TextBlockView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const select = (type: BlockType) => {
+  const select = (item: SlashMenuItem) => {
     // no need to clear the text first — onConvert replaces the whole block's content,
     // and doing both would race the debounced save from onChange against the immediate convert
-    onConvert?.(type);
+    onConvert?.(item.type as BlockType | "database_full", {
+      contentOverride: item.contentOverride as Partial<BlockContent> | undefined,
+      initialViewType: item.initialViewType,
+    });
   };
 
   return (
@@ -263,13 +271,13 @@ export function TextBlockView({
           if (showMenu) {
             if (e.key === "ArrowDown") {
               e.preventDefault();
-              setMenuIndex((i) => (i + 1) % options.length);
+              setMenuIndex((i) => (i + 1) % filteredItems.length);
             } else if (e.key === "ArrowUp") {
               e.preventDefault();
-              setMenuIndex((i) => (i - 1 + options.length) % options.length);
+              setMenuIndex((i) => (i - 1 + filteredItems.length) % filteredItems.length);
             } else if (e.key === "Enter") {
               e.preventDefault();
-              select(options[menuIndex].type);
+              select(filteredItems[menuIndex]);
             } else if (e.key === "Escape") {
               e.preventDefault();
               onChange({ text: "" });
@@ -291,23 +299,15 @@ export function TextBlockView({
         className="min-h-0 resize-none border-0 bg-transparent px-1 py-1 text-sm shadow-none focus-visible:ring-1"
       />
       {showMenu && (
-        <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border bg-popover py-1 shadow-lg">
-          {options.map((opt, i) => (
-            <button
-              key={opt.type}
-              // mousedown (not click) fires before the textarea blurs, so the menu doesn't vanish first
-              onMouseDown={(e) => {
-                e.preventDefault();
-                select(opt.type);
-              }}
-              className={cn(
-                "flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm",
-                i === menuIndex ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"
-              )}
-            >
-              <opt.icon className="h-3.5 w-3.5" /> {opt.label}
-            </button>
-          ))}
+        <div className="absolute left-0 top-full z-20 mt-1">
+          <SlashMenu
+            query={slashQuery ?? ""}
+            activeIndex={menuIndex}
+            onSelect={(_type, id) => {
+              const item = filteredItems.find((i) => i.id === id);
+              if (item) select(item);
+            }}
+          />
         </div>
       )}
     </div>
@@ -1043,6 +1043,7 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
           rows={activeTable.rows}
           onChangeColumns={(cols) => patchActiveTable({ columns: cols })}
           onChangeRows={(rows) => patchActiveTable({ rows })}
+          onOpenRow={(row) => setSelectedRow(row)} // <-- Menyambungkan aksi open ke state row yang terpilih
         />
       )}
 
@@ -1060,6 +1061,19 @@ export function TableBlockView({ content, onChange }: { content: TableBlockConte
           }}
         />
       )}
+    </div>
+  );
+}
+
+export function SimpleTableBlockView({ content, onChange }: { content: SimpleTableBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+  return (
+    <div className="rounded-lg border bg-card p-3 shadow-sm">
+      <TableEditor
+        columns={content.columns}
+        rows={content.rows}
+        onChangeColumns={(columns) => onChange({ ...content, columns })}
+        onChangeRows={(rows) => onChange({ ...content, rows })}
+      />
     </div>
   );
 }
@@ -1284,7 +1298,17 @@ export function LinkPageBlockView({ content, onChange, workspace }: { content: L
   );
 }
 
-export function ColumnsBlockView({ content, onChange }: { content: ColumnsBlockContent; onChange: (c: BlockContentUpdater) => void }) {
+export function ColumnsBlockView({
+  content,
+  onChange,
+  workspace,
+  pageId,
+}: {
+  content: ColumnsBlockContent;
+  onChange: (c: BlockContentUpdater) => void;
+  workspace?: string;
+  pageId?: string;
+}) {
   const addToColumn = (colIndex: number) => {
     const child: BlockDto = { id: generateUUID(), workspace: "", order: content.columns[colIndex].length, type: "text", content: { text: "" } };
     onChange((prev) => {
@@ -1301,6 +1325,30 @@ export function ColumnsBlockView({ content, onChange }: { content: ColumnsBlockC
       const child = col[childIndex];
       const resolved = typeof next === "function" ? next(child.content) : next;
       const newCol = col.map((c, i) => (i === childIndex ? { ...c, content: resolved } : c));
+      const columns = p.columns.map((c, i) => (i === colIndex ? newCol : c));
+      return { ...p, columns };
+    });
+  };
+
+  // Nested children live inline in this block's own JSON content (not separate Block rows via the
+  // API — see design doc on Toggle/Columns nesting), so converting a child's type is a pure local
+  // state update, unlike note-editor's convertBlock which round-trips through PATCH /api/blocks.
+  // "database_full" navigates away to a brand-new page, which doesn't make sense for a block
+  // that's about to be embedded inside a column, so it's a no-op here.
+  const convertChild = (
+    colIndex: number,
+    childIndex: number,
+    type: BlockType | "database_full",
+    overrides?: { contentOverride?: Partial<BlockContent>; initialViewType?: string }
+  ) => {
+    if (type === "database_full") return;
+    const content = overrides?.contentOverride
+      ? ({ ...emptyBlockContent(type), ...overrides.contentOverride } as BlockContent)
+      : emptyBlockContent(type);
+    onChange((prev) => {
+      const p = prev as ColumnsBlockContent;
+      const col = p.columns[colIndex];
+      const newCol = col.map((c, i) => (i === childIndex ? { ...c, type, content } : c));
       const columns = p.columns.map((c, i) => (i === colIndex ? newCol : c));
       return { ...p, columns };
     });
@@ -1323,11 +1371,14 @@ export function ColumnsBlockView({ content, onChange }: { content: ColumnsBlockC
               key={child.id}
               block={child}
               onChange={(c) => updateChild(colIndex, childIndex, c)}
+              onConvert={(type, overrides) => convertChild(colIndex, childIndex, type, overrides)}
               onDelete={() => removeChild(colIndex, childIndex)}
               onMoveUp={() => { }}
               onMoveDown={() => { }}
               isFirst
               isLast
+              workspace={workspace}
+              pageId={pageId}
             />
           ))}
           <button onClick={() => addToColumn(colIndex)} className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground hover:text-primary cursor-pointer">

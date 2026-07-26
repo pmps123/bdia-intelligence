@@ -4,9 +4,7 @@ import * as React from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { BlockView } from "@/components/app/block-view";
-import { SlashMenu, SLASH_MENU_GROUPS } from "@/components/app/slash-menu";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { emptyBlockContent } from "@/lib/types";
 import type { BlockContent, BlockDto, BlockType, NoteDto, TableBlockContent, TableViewDef } from "@/lib/types";
@@ -70,7 +68,6 @@ export function NoteEditor({
   const seededFor = React.useRef<string | null>(null);
   const focusRegistry = React.useRef<Record<string, { focus: () => void } | null>>({});
   const [pendingFocusId, setPendingFocusId] = React.useState<string | null>(null);
-  const [addMenuOpen, setAddMenuOpen] = React.useState(false);
 
   React.useEffect(() => setTitle(note?.title ?? ""), [note?.id, note?.title]);
 
@@ -79,7 +76,7 @@ export function NoteEditor({
     fetch(`/api/blocks?pageId=${noteId}`)
       .then((r) => r.json())
       .then((d) => setBlocks(d.blocks ?? []))
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => setBlocksLoading(false));
   }, [noteId]);
 
@@ -140,6 +137,22 @@ export function NoteEditor({
     );
   };
 
+  const addDatabaseFullPage = async () => {
+    const res = await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspace: note?.workspace }),
+    });
+    if (!res.ok) return;
+    const d = await res.json();
+    await fetch("/api/blocks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageId: d.note.id, type: "database_view" }),
+    });
+    window.location.href = `/notes?id=${d.note.id}`;
+  };
+
   const convertBlock = async (
     id: string,
     type: BlockType | "database_full",
@@ -158,22 +171,6 @@ export function NoteEditor({
     if (!res.ok) return;
     const d = await res.json();
     if (d.block) setBlocks((prev) => prev.map((b) => (b.id === id ? d.block : b)));
-  };
-
-  const addDatabaseFullPage = async () => {
-    const res = await fetch("/api/notes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace: note?.workspace }),
-    });
-    if (!res.ok) return;
-    const d = await res.json();
-    await fetch("/api/blocks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pageId: d.note.id, type: "database_view" }),
-    });
-    window.location.href = `/notes?id=${d.note.id}`;
   };
 
   const addBlock = async (type: BlockType | "database_full", overrides?: BlockOverrides) => {
@@ -200,22 +197,6 @@ export function NoteEditor({
     }
     setBlocks((prev) => [...prev, block]);
     setPendingFocusId(block.id);
-  };
-
-  const addDatabaseFullPage = async () => {
-    const res = await fetch("/api/notes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace: note?.workspace }),
-    });
-    if (!res.ok) return;
-    const d = await res.json();
-    await fetch("/api/blocks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pageId: d.note.id, type: "database_view" }),
-    });
-    window.location.href = `/notes?id=${d.note.id}`;
   };
 
   /** Enter inside a text/heading block: split off a new text block right after it and focus it. */
@@ -323,30 +304,14 @@ export function NoteEditor({
             ))}
           </div>
 
-          <Popover open={addMenuOpen} onOpenChange={setAddMenuOpen}>
-            <PopoverTrigger asChild>
-              <Button variant="ghost" size="sm" className="mt-2 text-muted-foreground hover:text-foreground">
-                <Plus className="h-3.5 w-3.5" /> Add block
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="start" className="w-auto p-0">
-              <SlashMenu
-                onSelect={(type, itemId) => {
-                  const item = SLASH_MENU_GROUPS.flatMap((g) => g.items).find((i) => i.id === itemId);
-                  if (type === "database_full") {
-                    addDatabaseFullPage();
-                    setAddMenuOpen(false);
-                    return;
-                  }
-                  addBlock(type as BlockType, {
-                    contentOverride: item?.contentOverride,
-                    initialViewType: item?.initialViewType,
-                  });
-                  setAddMenuOpen(false);
-                }}
-              />
-            </PopoverContent>
-          </Popover>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mt-2 text-muted-foreground hover:text-foreground"
+            onClick={() => addBlock("text")}
+          >
+            <Plus className="h-3.5 w-3.5" /> Add block
+          </Button>
         </>
       )}
     </div>
