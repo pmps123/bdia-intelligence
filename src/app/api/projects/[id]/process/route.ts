@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { prisma } from "@/lib/db";
 import { createDatasetFromUpload } from "@/lib/engine/dataset";
 import { runMatching } from "@/lib/engine/matching";
 import type { ColumnMapping } from "@/lib/types";
 
 export const runtime = "nodejs";
+// This route kicks off a long-running background job (dataset creation + fuzzy matching) and
+// returns immediately with a jobId the client polls. On Vercel, a plain fire-and-forget
+// `void (async () => {...})()` after the response is sent can get its execution environment frozen
+// right after the response goes out — the background work then silently stops mid-way (confirmed
+// directly: jobs stuck forever at "Reading vendor file", 25%, in production only, never locally
+// where the Node process simply stays alive). `after()` tells the platform to keep this function's
+// execution alive until the callback finishes, so the fix is purely about *how* the background work
+// is scheduled — nothing about the matching logic itself needed to change.
+export const maxDuration = 300;
 
 interface SideConfig {
   sheetName: string;
@@ -57,7 +67,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const job = await prisma.job.create({ data: { type: "PROCESS", message: "Starting" } });
   const { internalUploadId, vendorUploadId } = project;
 
-  void (async () => {
+  after(async () => {
     try {
       // clean re-run: drop previous session/datasets for this project
       if (project.sessionId) await prisma.matchSession.delete({ where: { id: project.sessionId } }).catch(() => null);
@@ -100,7 +110,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         data: { status: "FAILED", message: e instanceof Error ? e.message : "Processing failed" },
       });
     }
-  })();
+  });
 
   return NextResponse.json({ jobId: job.id });
 }
